@@ -50,16 +50,17 @@ git log --oneline <基准commit>..upstream/main -- confidential-data-hub/docs/SE
 | 29 | [image-rs/test_data/custom-generate_test_data.md](image-rs/test_data/custom-generate_test_data.md) | [image-rs/test_data/generate_test_data.md](image-rs/test_data/generate_test_data.md) | 2f755e30@2023-07-31 | 翻译 | 生成测试数据脚本的使用说明 |
 | 30 | [image-rs/tests/custom-README.md](image-rs/tests/custom-README.md) | [image-rs/tests/README.md](image-rs/tests/README.md) | ee2b1f15@2026-09-18 | 翻译 | image-rs 集成测试说明（部分需 root） |
 | 31 | [ocicrypt-rs/custom-README.md](ocicrypt-rs/custom-README.md) | [ocicrypt-rs/README.md](ocicrypt-rs/README.md) | 2e23d995@2023-06-16 | 翻译 | ocicrypt-rs 库：OCI 镜像层加解密与密钥封装（JWE/keyprovider） |
-| 32 | [custom-项目理解.md](custom-项目理解.md) | （无原文） | — | **个人新增** | 个人原创：基于源码核实的项目架构理解（含组件/feature/时序） |
-| 33 | [custom-个人开发指南.md](custom-个人开发指南.md) | （无原文） | — | **个人新增** | 个人原创：D2 主责（CSV attester + CDH sealed secret）开发指南 |
+| 32 | [ocicrypt-rs/data/custom-generate_keys.md](ocicrypt-rs/data/custom-generate_keys.md) | [ocicrypt-rs/data/generate_keys.md](ocicrypt-rs/data/generate_keys.md) | 5d882e15@2023-06-02 | 翻译 | 测试密钥生成脚本说明：用 openssl 生成单测/集成测试所需的 RSA/EC 密钥、证书与口令文件 |
+| 33 | [custom-项目理解.md](custom-项目理解.md) | （无原文） | — | **个人新增** | 个人原创：基于源码核实的项目架构理解（含组件/feature/时序） |
+| 34 | [custom-个人开发指南.md](custom-个人开发指南.md) | （无原文） | — | **个人新增** | 个人原创：D2 主责（CSV attester + CDH sealed secret）开发指南 |
 
-> 注：序号 32、33 为个人原创笔记（项目理解 / 个人开发指南），无固定原文，无过期概念，随项目认知更新即可。
+> 注：序号 33、34 为个人原创笔记（项目理解 / 个人开发指南），无固定原文，无过期概念，随项目认知更新即可。
 
 ## 统计
 
-- 翻译类：`30` 份（覆盖仓库内几乎全部原始 `.md` 文档）
+- 翻译类：`31` 份（覆盖仓库内全部原始 `.md` 文档）
 - 个人新增：`2` 份
-- 合计：`32` 份 `custom-` 文件
+- 合计：`33` 份 `custom-` 文件
 
 ## 维护约定
 
