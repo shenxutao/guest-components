@@ -75,7 +75,7 @@ curl -s http://127.0.0.1:8006/info | head
 ## 步骤 0：准备 Ubuntu 环境（系统选型 + 服务器初始化 + 代码上服务器）
 
 **0.0 系统选型（重装系统时）**
-- 发行版：Ubuntu LTS（24.04 首选，26.04 也可用）；**不要选 CentOS / Rocky**（Makefile 的 `DebianOS` 检测不触发，依赖要手搓）
+- 发行版：Ubuntu LTS（**24.04 首选**；26.04 LTS 也可用但较新、生产验证少）；**不要选 CentOS / Rocky**（Makefile 的 `DebianOS` 检测不触发，依赖要手搓）
 - 架构：**x86_64**（项目 TEE attester 均为 x86 平台，CSV 是海光 x86）；**避开 ARM / 鲲鹏**
 - 镜像类型：基于操作系统镜像（干净系统）
 
