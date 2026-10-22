@@ -209,12 +209,32 @@ cargo run -p confidential-data-hub --bin ttrpc-cdh-tool -- \
 
 <a id="step63"></a>
 ### 6.3 sealed secret（D2 重点）
+**背景**：CDH 用「JWS(ES256) 签名 + 数字信封/Vault 引用」封装密钥（完整机制见 `custom-CDH-SealedSecret.md`）。**二进制名是 `secret`**（非 `secret_cli`），调用 `cargo run -p confidential-data-hub --bin secret -- <子命令>`。
+
+**本地端到端（Vault + offline_fs_kbc，走真验签）**：
 ```bash
-cargo run -p confidential-data-hub --bin secret_cli -- --help
-# 用 secret_cli 跑 密封/解封 样例，理顺
-# /run/confidential-containers/cdh/sealed-secret 凭据路径 与 签名校验逻辑
-# 来源：confidential-data-hub/hub/src/bin/secret_cli.rs
+# 生成 P-256 签名密钥对
+cargo run -p confidential-data-hub --bin secret -- keygen --kid my-key --output_dir /tmp/secrets
+
+# 放验签公钥到 SIGNING_CREDENTIALS_PATH（需 root，因在 /run 下）
+sudo mkdir -p /run/confidential-containers/cdh/sealed-secret
+sudo cp /tmp/secrets/my-key-public.json /run/confidential-containers/cdh/sealed-secret/my-key
+
+# 密封一个指向 KBS 资源的 Vault secret
+cargo run -p confidential-data-hub --bin secret -- seal --type vault \
+  --resource_uri "kbs:///default/key/1" --provider kbs \
+  --signing_kid my-key --signing_jwk_path /tmp/secrets/my-key-private.json \
+  | tee /tmp/sealed-secret.txt
+
+# 解封（AA_KBC_PARAMS 让 kbs provider 走 offline_fs_kbc）
+AA_KBC_PARAMS="offline_fs_kbc::null" \
+OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json" \
+cargo run -p confidential-data-hub --bin secret -- unseal \
+  --file_path /tmp/sealed-secret.txt --aa_kbc_params "offline_fs_kbc::null"
+
+cat /tmp/sealed-secret.txt.unsealed   # 应等于 my-dev-secret-key-001
 ```
+**说明**：信封格式、Envelope/Vault 区别、`kid` 寻址、`SKIP_SEALED_SECRET_VERIFICATION` 等见 `custom-CDH-SealedSecret.md`；`/tmp/dev-resources.json` 来自步骤 3（含 `default/key/1`）。
 
 <a id="step64"></a>
 ### 6.4 AA evidence / token（桩）
