@@ -311,6 +311,40 @@
 3. image-rs `decrypt` 调用 `ocicrypt_rs` 解密层；解 KEK 时经 `resource/kbs` 向 CDH（`GetResourceService`）请求密钥，CDH 再经 KBS 客户端向 KBS/Trustee 证明并取回
 4. 签名验证（simple/cosign）决定镜像是否可信
 
+### 10.1 kata-agent 拉加密镜像的精确链路（源码级）
+
+关键纠正：**kata-agent 不是「从 CDH 拿镜像」**——镜像字节来自 OCI registry；CDH 只提供**解密密钥 / 资源**。且这条路**完全不经过 ASR REST**，是 image-rs 直接用 ttrpc/gRPC 连 CDH。
+
+```
+kata-agent (guest 内，已链接 image-rs 库)
+   │ ① 拉加密镜像：image-rs 直接从 OCI registry 取镜像字节 (HTTPS)
+   │ ② 解密需要 KEK → image-rs 的 kbs 资源通道
+   ▼
+image-rs/src/resource/kbs  →  SecureChannel
+   │ ttrpc 直连（不走 ASR！）
+   │ SOCKET_ADDR = unix:///run/confidential-containers/cdh.sock
+   ▼
+CDH 的 GetResourceService.get_resource(ResourcePath)   ← ttrpc/gRPC 服务端
+   │ hub.get_resource() → cc_kbc(KbsClient) → 出站 HTTPS
+   ▼
+外部 KBS / Trustee (RCAR/Passport)        ← 唯一跨边界，CDH 主动出站
+   │ 返回密钥
+   ▼
+image-rs 用 KEK 经 ocicrypt-rs 解密镜像层
+```
+
+**可引用事实：**
+- image-rs 连 CDH 的客户端：`image-rs/src/resource/kbs/ttrpc.rs:16` 定义 `SOCKET_ADDR = "unix:///run/confidential-containers/cdh.sock"`，`connect(SOCKET_ADDR)` 后调 `GetResourceServiceClient::get_resource(...)`（`:34-38`），类型来自 `protos::ttrpc::cdh::api_ttrpc::GetResourceServiceClient`。
+- feature 选路：`image-rs/src/resource/kbs/mod.rs:27-28` 按 `keywrap-ttrpc` / `keywrap-grpc` 选 `ttrpc` 或 `grpc` 实现（`SecureChannel`）；二者必选其一，否则 `compile_error`。
+- URI 路由：`image-rs/src/resource/mod.rs:73` `get_resource(uri)`——带 `kbs://` scheme 的资源（如 `kbs:///default/key/...`）走 `secure_channel` → CDH；`file://` 走本地。所以 CDH 提供的是「资源/密钥」，不是镜像本身。
+- CDH 服务端：`confidential-data-hub/hub/src/bin/ttrpc_server/mod.rs:69` 实现 `GetResourceService`，`get_resource` → `self.hub.get_resource(req.ResourcePath)`；同一 server 还挂着 `ImagePullService` / `SealedSecretService` / `SecureMountService` / `KeyProviderService`（`:22-24`）。监听 Unix socket（guest 内），对外不暴露。
+
+**两个要点：**
+1. kata-agent 调 CDH 走的是「image-rs 内嵌的 ttrpc/gRPC 直连 `cdh.sock`」，**不是 ASR 的 REST 门面**。ASR 给只会 HTTP 的普通工作负载用；kata-agent 作为 TCB 组件，直接用更底层的 ttrpc。
+2. **CDH 给的是密钥/资源，不是镜像字节**。镜像本身由 image-rs 从 registry 拉；CDH 只在「解 KEK / 取签名公钥 / 取 auth·policy 配置」时被调用（见 `image-rs/src/builder.rs:102/111/124/165` 取 auth、sigstore 配置、安全策略、registry 配置）。
+
+> 补充：CDH 还提供 `ImagePullService`（`ttrpc_server/mod.rs:22`），理论上可把「镜像拉取」整段委托给 CDH；但标准 CoCo 流程是 kata-agent 内链接的 image-rs 自己拉、只把密钥/资源请求甩给 CDH。
+
 ---
 
 ## 十一、构建系统（Makefile）
