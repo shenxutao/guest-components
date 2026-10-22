@@ -56,14 +56,15 @@ git log --oneline <基准commit>..upstream/main -- confidential-data-hub/docs/SE
 | 35 | [custom-D2连调runbook.md](custom-D2连调runbook.md) | （无原文） | — | **个人新增** | 个人原创：D2 连调详细指南（**顶部带锚点目录可跳转**；逐步骤命令+说明；offline_fs_kbc + none/all attester 免 Beeceptor；**步骤 8 含「测试 VM → 真海光 CSV」迁移映射，双用途**；含 mock KBS 草图） |
 | 36 | [custom-CDH-SealedSecret.md](custom-CDH-SealedSecret.md) | （无原文） | — | **个人新增** | 个人原创：CDH sealed secret 信封格式（JWS ES256 外层 + Envelope/Vault 内层）与 secret_cli（二进制名 `secret`）用法、本地 Vault+offline_fs_kbc 端到端配方 |
 | 37 | [custom-真机CSV部署.md](custom-真机CSV部署.md) | （无原文） | — | **个人新增** | 个人原创：真海光 CSV 机密服务器部署指南（D2 收尾/生产验明）；复用测试 VM 逻辑，只讲真机专属（构建口径/KBC 指向真 KBS/sealed secret 密钥预置/CSV 证据链路/kata 接入/验证检查表） |
+| 38 | [custom-CSV证据与Trustee对齐.md](custom-CSV证据与Trustee对齐.md) | （无原文） | — | **个人新增** | 个人原创：D2↔D4 跨仓协调；CSV attester 证据格式（`CsvEvidence`/report_data 挑战绑定/证书链来源/RTMR+SM3）与 Trustee verifier 经 `kbs-types`(Tee::Csv/HashAlgorithm::Sm3/Response-Challenge) 的字段对齐清单与变更控制 |
 
-> 注：序号 33、34、35、36、37 为个人原创笔记（项目理解 / 个人开发指南 / D2 连调 runbook / CDH sealed secret / 真机 CSV 部署），无固定原文，无过期概念，随项目认知更新即可。
+> 注：序号 33、34、35、36、37、38 为个人原创笔记（项目理解 / 个人开发指南 / D2 连调 runbook / CDH sealed secret / 真机 CSV 部署 / CSV 证据与 Trustee 对齐），无固定原文，无过期概念，随项目认知更新即可。
 
 ## 统计
 
 - 翻译类：`31` 份（覆盖仓库内全部原始 `.md` 文档）
-- 个人新增：`4` 份
-- 合计：`35` 份 `custom-` 文件
+- 个人新增：`5` 份
+- 合计：`36` 份 `custom-` 文件
 
 ## 维护约定
 

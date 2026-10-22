@@ -13,7 +13,7 @@
 2. 已构建的**静态二进制**：`make build TEE_PLATFORM=csv LIBC=musl`。
 3. 真 **Trustee / KBS** 服务（`https://<kbs>`），支持 RCAR / Passport 验明。
 4. **kata-runtime**（vsock + gRPC，非 HTTP）打通 guest 内 AA/CDH 与宿主 Trustee。
-5. CSV attester 与 Trustee verifier 的 **`kbs-types` 协议字段对齐**（跨仓协调，属 D2 收尾项）。
+5. CSV attester 与 Trustee verifier 的 **`kbs-types` 协议字段对齐**（跨仓协调，属 D2 收尾项；字段级对齐清单见 `custom-CSV证据与Trustee对齐.md`）。
 
 ## 1. 系统准备（复用测试 VM）
 
