@@ -6,7 +6,7 @@
 
 ## 目录
 
-- [步骤 0：准备 Ubuntu 环境（工具链 + 系统依赖）](#step0)
+- [步骤 0：准备 Ubuntu 环境（系统选型 + 服务器初始化 + 代码上服务器）](#step0)
 - [步骤 1：进入仓库并切到开发分支](#step1)
 - [步骤 2：构建三个组件（开发用原生 glibc，免 musl 交叉）](#step2)
 - [步骤 3：准备 offline_fs_kbc 资源文件（替代外部 KBS）](#step3)
@@ -24,28 +24,51 @@
 - [参考文件](#refs)
 
 <a id="step0"></a>
-## 步骤 0：准备 Ubuntu 环境（工具链 + 系统依赖）
+## 步骤 0：准备 Ubuntu 环境（系统选型 + 服务器初始化 + 代码上服务器）
 
+**0.0 系统选型（重装系统时）**
+- 发行版：Ubuntu LTS（24.04 首选，26.04 也可用）；**不要选 CentOS / Rocky**（Makefile 的 `DebianOS` 检测不触发，依赖要手搓）
+- 架构：**x86_64**（项目 TEE attester 均为 x86 平台，CSV 是海光 x86）；**避开 ARM / 鲲鹏**
+- 镜像类型：基于操作系统镜像（干净系统）
+
+**0.1 服务器初始化（一键脚本）**
 ```bash
-# 0.1 安装 rustup（若未装）
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
+# 在腾讯云 Ubuntu x86_64 上执行（装 rustup 1.95.0 + 编译依赖 + musl 目标）
+bash scripts/setup-server.sh
+```
+脚本见 `scripts/setup-server.sh`：装 `build-essential`/`pkg-config`/`libssl-dev`/`protobuf-compiler`/`clang`/`libclang-dev`/`cmake`/`musl-tools`，装 rustup 并加 `x86_64-unknown-linux-musl` 目标。
+> 轻量服务器内存小（常见 2G）时建议加 2G swap 防编译 OOM：`sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`
 
-# 0.2 进入仓库后 rust-toolchain.toml 会自动锁定 1.95.0，确认版本
-cargo --version
-rustc --version          # 期望输出含 1.95.0
+**0.2 把「当前分支」代码带到服务器（本地 Mac 执行）**
+当前分支 `2026-10-21-dev` 有未推提交，不能用远端 clone；用 `git bundle`：
+```bash
+# Mac 上：打包分支（含全部本地提交）
+cd "/Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components"
+git bundle create /tmp/gc-dev.bundle 2026-10-21-dev
+scp /tmp/gc-dev.bundle ubuntu@<服务器IP>:~/
+```
+```bash
+# 服务器上：从 bundle 还原
+git clone ~/gc-dev.bundle guest-components
+cd guest-components
+git checkout 2026-10-21-dev
+git log --oneline -3          # 应看到 b933e96d 等提交
+```
 
-# 0.3 安装编译期系统依赖
-sudo apt-get update
-sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler clang
+**0.3 确认工具链版本**
+```bash
+cargo --version && rustc --version && protoc --version
+# rustc 期望含 1.95.0（仓库 rust-toolchain.toml 自动锁定）
 ```
 
 **说明**
-- `rustup`：Rust 工具链管理器；本仓库 `rust-toolchain.toml` 已固定 1.95.0，`cd` 进仓库会自动切换，无需手动 `rustup default`。
+- `rustup`：Rust 工具链管理器；本仓库 `rust-toolchain.toml` 已固定 1.95.0，`cd` 进仓库会自动切换。
 - `build-essential`：提供 `gcc`/`make` 等原生编译工具。
 - `pkg-config` + `libssl-dev`：OpenSSL 是本仓库加密后端的**固定依赖**（非可选项），编译期需要其头文件与链接库。
 - `protobuf-compiler`：`protos` 仓库用它生成 ttrpc / gRPC 的 Rust 绑定代码。
-- `clang`：部分 TEE 绑定（如 `iocuddle`/ioctl 包装）在构建时需要。
+- `clang`：部分 TEE 绑定（如 `iocuddle`/ioctl 包装、`csv-rs`/`codicon` 的 bindgen）在构建时需要。
+- 若改用能联网时推送再 clone：`git push origin 2026-10-21-dev` 后 `git clone -b 2026-10-21-dev <你的fork>`。
+- 服务器是普通 VM、非海光 CSV 机密机：`TEE_PLATFORM=csv` 能**编译**但运行拿不到 `/dev/csv-guest` 出不了真证据；真 CSV 验明需海光硬件（见步骤 8）。
 
 <a id="step1"></a>
 ## 步骤 1：进入仓库并切到开发分支
@@ -78,7 +101,7 @@ cargo build -p confidential-data-hub -p attestation-agent -p api-server-rest
   #         避免 none 特性歧义；开发期用 LIBC=gnu 免去 musl 工具链
   make build TEE_PLATFORM=all LIBC=gnu
   ```
-  > 注意：`Makefile:37` 仍有 `# TODO: Add support for CSV`，所以**不能直接 `TEE_PLATFORM=csv`**；这是 D2-M1 要补的构建入口。
+  > 注意：`Makefile` 已补 `csv → csv-attester` 映射（D2-M1 已完成，见 `Makefile:34-37`），现在可直接 `TEE_PLATFORM=csv` 构建 CSV attester。
 
 <a id="step3"></a>
 ## 步骤 3：准备 offline_fs_kbc 资源文件（替代外部 KBS）
