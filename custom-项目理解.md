@@ -345,6 +345,35 @@ image-rs 用 KEK 经 ocicrypt-rs 解密镜像层
 
 > 补充：CDH 还提供 `ImagePullService`（`ttrpc_server/mod.rs:22`），理论上可把「镜像拉取」整段委托给 CDH；但标准 CoCo 流程是 kata-agent 内链接的 image-rs 自己拉、只把密钥/资源请求甩给 CDH。
 
+### 10.2 image-rs 在 guest 内吗？与 CDH 的关系
+
+**结论：image-rs 运行在 guest（机密 VM）内部，且是 CDH 的客户端。** 二者同处 guest、同属 TCB。
+
+**为什么 image-rs 必须在 guest 内：**
+- 解密密钥与镜像明文都不能离开 TEE、不能让 Host 看到，故「拉镜像 + 解密」必须发生在 guest 内。
+- 直接证据：`image-rs/src/resource/kbs/ttrpc.rs:16` 连接 `unix:///run/confidential-containers/cdh.sock`——这是 CDH 在 **guest 内**创建的 Unix socket，image-rs 能连上即说明它与 CDH 在同一 guest。
+- 性质：`image-rs` 是**库（crate）非守护进程**，被链接进 kata-agent / guest 内镜像服务执行；`CDH` 是独立 **binary 守护进程**。
+
+**二者关系（客户端 / 服务端）：**
+
+```
+        guest 内（同一机密 VM）
+┌─────────────────────────────────────────────┐
+│  kata-agent（链接 image-rs 库）              │
+│     └─ image-rs  ──ttrpc/gRPC──► CDH         │
+│        (客户端)        cdh.sock    (守护进程) │
+└─────────────────────────────────────────────┘
+```
+
+- **角色**：image-rs = 库（客户端），CDH = 守护进程（服务端）；都在 guest 内、都属于 TCB。
+- **依赖方向**：image-rs **调用** CDH，不反向。image-rs 不实现密钥获取逻辑，把「取 KEK / 取资源」委托给 CDH（`kbs://` → `GetResourceService`；签名公钥 / auth / policy / registry 配置 → `resource_provider.get_resource`，见 `builder.rs:102/111/124/165`）。
+- **职责切分（不重叠）**：
+  - image-rs：从 OCI registry 拉层 + 签名验证（simple/cosign）+ 调 `ocicrypt-rs` 解密
+  - CDH：密钥代理（持 KBC 逻辑，真正连 KBS/Trustee）、sealed secret、安全挂载、资源服务
+- **密钥逻辑集中于 CDH 的原因**：「向 KBS/Trustee 证明并取密钥」涉及远程证明（AA 也参与），集中到 CDH(+AA) 做，image-rs 不必各自实现一套证明 / 密钥释放逻辑，避免 TCB 膨胀与逻辑分叉。
+- **通信边界**：二者仅经 guest 内 Unix socket 交互，**都不对外部暴露**（呼应「AA/CDH 不对外」）；image-rs 对外只连 OCI registry，并经 CDH 间接连 KBS/Trustee。
+- 另：CDH 还实现 `KeyProviderService`（`ttrpc_server/mod.rs:24`，对应 ocicrypt keyprovider 协议）作为另一条密钥解包通道（Host 侧 containerd/ocicrypt 走 keyprovider 调 CDH）；但本仓库 image-rs 主路径用 `kbs://` → `GetResourceService`，不走那条。
+
 ---
 
 ## 十一、构建系统（Makefile）
