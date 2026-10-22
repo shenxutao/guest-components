@@ -23,6 +23,54 @@
 - [附录 B：最小 mock KBS（Rust，hyper，仅示意）](#appendixb)
 - [参考文件](#refs)
 
+---
+
+## 速查（TL;DR）
+
+最小可跑通路径（测试 VM；命令在 Ubuntu x86_64 上执行）：
+
+```bash
+# 1) 装环境（一次）
+bash scripts/setup-server.sh
+
+# 2) 取代码（Mac 上打包，服务器上还原）
+git bundle create /tmp/gc-dev.bundle 2026-10-21-dev && scp /tmp/gc-dev.bundle ubuntu@<IP>:~/
+#   服务器上：git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkout 2026-10-21-dev
+
+# 3) 构建
+cargo build -p confidential-data-hub -p attestation-agent -p api-server-rest
+
+# 4) 准备 KBC 资源并启动（生成 dev-resources.json 见步骤 3；起服务见步骤 5）
+export AA_KBC_PARAMS="offline_fs_kbc::null"
+export OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json"
+
+# 5) 验证
+curl -s http://127.0.0.1:8006/info | head
+```
+
+> 真海光 CSV 部署：把上表的 attester 换成 `csv`、KBC 指向真 KBS 即可。完整真机步骤见 `custom-真机CSV部署.md` 与下方步骤 8 迁移映射。
+
+## 图例与约定
+
+- 命令默认在 **Ubuntu x86_64** 上执行；行首 `$` 表示一条命令（实际粘贴时去掉 `$`）。
+- 代码块内 `#` 开头为注释，可忽略；较长的解释放在代码块后的「说明」里。
+- 标注「（确认）」处：以你机器上 `cargo build` 实际产物 / 文件实际内容为准（本文为核实自源码的参考值）。
+- 两个核心环境变量：
+  - `AA_KBC_PARAMS`：格式 `KBC名::KBS_URI`，决定 AA/CDH 走哪个 KBC（本文 `offline_fs_kbc::null`，真机 `cc_kbc::https://<kbs>`）。
+  - `OFFLINE_FS_KBC_EXTRA_FILE_PATH`：`offline_fs_kbc` 额外资源文件路径。
+
+## 步骤一览
+
+| 阶段 | 步骤 | 目的 |
+|---|---|---|
+| 准备 | 0 | 选系统、初始化服务器、把当前分支代码上服务器 |
+| 构建 | 1–2 | 进分支、编译三个组件 |
+| 配置 | 3–4 | 准备 offline_fs_kbc 资源、配置 KBC 参数 |
+| 运行 | 5 | 起 CDH → AA → ASR 三个守护进程 |
+| 验证 | 6 | 取资源 / 直连 CDH / sealed secret / evidence 桩 |
+| 可选 | 7 | 用 mock KBS 测 cc_kbc 真 HTTP 路径 |
+| 迁移 | 8 | 测试 VM → 真海光 CSV 的差异映射与检查表 |
+
 <a id="step0"></a>
 ## 步骤 0：准备 Ubuntu 环境（系统选型 + 服务器初始化 + 代码上服务器）
 
@@ -69,6 +117,8 @@ cargo --version && rustc --version && protoc --version
 - `clang`：部分 TEE 绑定（如 `iocuddle`/ioctl 包装、`csv-rs`/`codicon` 的 bindgen）在构建时需要。
 - 若改用能联网时推送再 clone：`git push origin 2026-10-21-dev` 后 `git clone -b 2026-10-21-dev <你的fork>`。
 - 服务器是普通 VM、非海光 CSV 机密机：`TEE_PLATFORM=csv` 能**编译**但运行拿不到 `/dev/csv-guest` 出不了真证据；真 CSV 验明需海光硬件（见步骤 8）。
+
+---
 
 <a id="step1"></a>
 ## 步骤 1：进入仓库并切到开发分支
@@ -149,6 +199,8 @@ export OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json"
 - `OFFLINE_FS_KBC_EXTRA_FILE_PATH`：让 `offline_fs_kbc` 额外从指定文件加载资源（`offline_fs.rs:24` 定义该环境变量，`:53` 读取；多个文件用 `,` 分隔），免改 `/etc` 下的默认文件。
 - **每个启动组件的终端都要先 `export` 这两个变量**（或写进同一 shell / systemd unit）。
 
+---
+
 <a id="step5"></a>
 ## 步骤 5：创建运行时目录并启动三个守护进程
 
@@ -182,6 +234,8 @@ cargo run -p api-server-rest --bin api-server-rest
 **说明**
 - 建议三个组件各开一个终端（或 `nohup ... &` / systemd unit 后台运行），便于看日志。
 - 用 `make build` 产出的二进制时，把 `cargo run -p X --bin Y` 换成直接执行 `./target/x86_64-unknown-linux-gnu/release/<bin>` 并前置同样的环境变量。
+
+---
 
 <a id="step6"></a>
 ## 步骤 6：验证（连调检查表）
@@ -258,6 +312,8 @@ export AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080"
 # 然后按步骤 5 重启 CDH / AA
 ```
 
+---
+
 <a id="step8"></a>
 ## 步骤 8：从测试 VM 迁移到真海光 CSV（复用本 runbook）
 
@@ -284,14 +340,12 @@ export AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080"
 4. CSV attester 与 Trustee verifier 的协议字段对齐（跨仓 `kbs-types`），属 D2 收尾的协调项。
 
 **迁移检查表（到真机时逐项核对）**
-- [ ] `make build TEE_PLATFORM=csv LIBC=musl` 编出静态 `attestation-agent`（csv-attester 已接入 Makefile `:34-37`）。
-- [ ] 机密 VM 内 CDH 启动时把 sealed-secret 验签公钥预置到 `/run/confidential-containers/cdh/sealed-secret/`。
-- [ ] `AA_KBC_PARAMS` 指向真 KBS（如 `cc_kbc::https://<kbs>`）。
-- [ ] `/dev/csv-guest` 存在且 AA 能打开 → evidence 接口返回真实 CSV 报告。
-- [ ] Trustee 侧 verifier 对 CSV 报告验明通过（RCAR 端到端）。
-- [ ] kata-runtime 拉起机密容器，guest 内组件与宿主 Trustee 经 vsock 互通。
+
+完整真机部署步骤（系统准备、构建口径、KBC 指向、密钥预置、证据链路、kata 接入、逐条验证）见 **`custom-真机CSV部署.md`**。其中与本 runbook 的差异已在上表逐条列出；复用到真机的部分即步骤 0–7 的全部逻辑。
 
 > 说明：本 runbook 在你腾讯云普通 VM 上得到的**所有产出（编译出的二进制、`offline_fs_kbc` 配置、sealed secret 信封格式与验签逻辑、ASR/CDH/AA 启动方式）都直接复用到真机**；真机只是把 `attester=csv`、KBC 指向真 KBS、密钥预置方式、证据链路这几处替换掉，无需重写流程。
+
+---
 
 <a id="appendixa"></a>
 ## 附录 A：offline_fs_kbc 资源文件格式速查
@@ -300,6 +354,8 @@ export AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080"
 - 额外文件：`OFFLINE_FS_KBC_EXTRA_FILE_PATH`（`:24`，`,` 分隔多个）。
 - JSON 结构：`{ "resource_path": "base64(value)" }`，解析见 `:71-87`。
 - 资源寻址：URI `kbs:///<resource_path>`（如 `kbs:///default/key/1`）→ 查表取 base64 解码后的值。
+
+---
 
 <a id="appendixb"></a>
 ## 附录 B：最小 mock KBS（Rust，hyper，仅示意）
@@ -323,6 +379,8 @@ async fn main() {
         .unwrap();
 }
 ```
+
+---
 
 <a id="refs"></a>
 ## 参考文件
