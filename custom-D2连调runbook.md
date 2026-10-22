@@ -1,8 +1,8 @@
 # D2 腾讯云 Ubuntu 连调 Runbook（详细版）
 
-> **目标**：在普通 Linux x86_64（腾讯云轻量 Ubuntu，**非机密 VM**）上，把 D2 涉及的 guest 组件跑起来，完成「自己的服务部署 + 依赖桩」的连调，验证集成管道。
-> **能力边界**：无 TEE → 无真硬件证据；用 `all`/`none` attester 桩；用 `offline_fs_kbc` 替代外部 KBS（**无需 Beeceptor**）。真 CSV 证明仍需海光硬件 + Trustee 真部署 + kata-runtime。
-> **约定**：命令在腾讯云 Ubuntu 上执行；`$` 后为一行命令；凡标注「（确认）」处，以你机器上 `cargo build` 实际产物为准。
+> **目标**：在 Linux x86_64（Ubuntu）上把 D2 涉及的 guest 组件跑起来，完成「自己的服务部署 + 依赖桩」的连调，验证集成管道。**本 runbook 双用途**：① 腾讯云普通 VM（开发/测试，无 TEE）② 真海光 CSV 机密服务器（生产/验明）；两者复用同一套步骤，差异只在少数几处（见步骤 8 迁移映射）。
+> **能力边界（测试 VM）**：无 TEE → 无真硬件证据；用 `all`/`none` attester 桩；用 `offline_fs_kbc` 替代外部 KBS（**无需 Beeceptor**）。真 CSV 证明在真机环境用 `csv` attester + 真 Trustee/KBS 达成（见步骤 8）。
+> **约定**：命令在 Ubuntu x86_64 上执行；`$` 后为一行命令；凡标注「（确认）」处，以你机器上 `cargo build` 实际产物为准。
 
 ## 目录
 
@@ -18,7 +18,7 @@
   - [6.3 sealed secret（D2 重点）](#step63)
   - [6.4 AA evidence / token（桩）](#step64)
 - [步骤 7（可选）：用 mock KBS 测 cc_kbc 真 HTTP 路径](#step7)
-- [步骤 8：边界与真机阶段下一步](#step8)
+- [步骤 8：从测试 VM 迁移到真海光 CSV（复用本 runbook）](#step8)
 - [附录 A：offline_fs_kbc 资源文件格式速查](#appendixa)
 - [附录 B：最小 mock KBS（Rust，hyper，仅示意）](#appendixb)
 - [参考文件](#refs)
@@ -259,15 +259,39 @@ export AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080"
 ```
 
 <a id="step8"></a>
-## 步骤 8：边界与真机阶段下一步
+## 步骤 8：从测试 VM 迁移到真海光 CSV（复用本 runbook）
 
-- ✅ **本流程能验**：组件编译/启动/互通、REST/ttrpc 接口、资源取回、密钥解封管道。
-- ❌ **验不了**：真机密证明（需 TEE 硬件）、kata-runtime 接入（vsock/gRPC，非 HTTP）。
-- **真机阶段**（D2 收尾）：
-  1. 海光 CSV 硬件环境；
-  2. 补 `Makefile` 的 `csv → csv-attester` 映射（当前 `Makefile:37` 为 TODO）；
-  3. 把 attester 切回 `csv`（构建 `TEE_PLATFORM=csv`）；
-  4. 部署真 Trustee/KBS + 接 kata-runtime，做 RCAR 端到端验明。
+本 runbook 的每一步在真海光 CSV 服务器上**同样适用**——只是把少数几处「桩 / 离线」替换成「真 TEE / 真 Trustee」。下表给出逐步映射：**「不变」= 原样照搬；「改」= 只换那一项**。
+
+| 步骤 | 测试 VM（本文现状） | 真海光 CSV 服务器 | 改动 |
+|---|---|---|---|
+| 0 系统/初始化 | Ubuntu x86_64 + `bash scripts/setup-server.sh` | 完全相同（同 OS、同脚本） | 不变 |
+| 0.2 代码上服务器 | `git bundle`（因未推） | 联网后直接 `git clone` fork 即可 | 可选 |
+| 1 切分支 | `2026-10-21-dev` | 同分支（或合入后的发布分支） | 不变 |
+| 2 构建 | `cargo build` / `make build TEE_PLATFORM=all LIBC=gnu` | `make build TEE_PLATFORM=csv LIBC=musl`（静态、编入 csv-attester） | 改：attester + LIBC |
+| 3 资源文件 | 本地 `dev-resources.json`（base64 明文） | 由**真 Trustee/KBS** 下发，不再手搓 JSON | 改：来源 |
+| 4 KBC 参数 | `AA_KBC_PARAMS=offline_fs_kbc::null` | `AA_KBC_PARAMS=cc_kbc::https://<真KBS>`（或 `offline_fs_kbc::<kbs_uri>`） | 改：KBC 指向 |
+| 5 启动 | 同组件、同 socket/端口、同顺序 | 完全相同（CDH/AA/ASR 架构不变，仅 attester 行为不同） | 不变 |
+| 6.1–6.2 取资源 | 经 offline_fs_kbc 取回 | 经真 KBS 取回（接口/URI 不变） | 改：后端 |
+| 6.3 sealed secret | 本地公钥文件验签（`SIGNING_CREDENTIALS_PATH/<kid>`） | 公钥**由机密 VM 启动时预置**；`kid` 可改为 **KBS URI** 由 Trustee 托管（跨仓 `kbs-types` 对齐） | 改：密钥预置 |
+| 6.4 evidence | 桩数据/明确错误（无硬件） | **真 CSV 证据**：AA 走 `csv` attester 读 `/dev/csv-guest` 出度量，经 RCAR 挑战-应答由 Trustee 验明 | 改：证据链路 |
+| 7 mock KBS | 本地 mock 验证 HTTP 形状 | 不需要（直接用真 KBS） | 跳过 |
+
+**真机专属前提（测试 VM 没有）**
+1. 海光 CSV 硬件（机密 VM，内核带 `csv-guest` 驱动，`/dev/csv-guest` 可读）。
+2. 真 **Trustee / KBS** 部署并提供 `https://<kbs>` 端点（RCAR/Passport 验明）。
+3. **kata-runtime** 接入（vsock + gRPC，非 HTTP），把 guest 内 AA/CDH 与宿主 Trustee 打通。
+4. CSV attester 与 Trustee verifier 的协议字段对齐（跨仓 `kbs-types`），属 D2 收尾的协调项。
+
+**迁移检查表（到真机时逐项核对）**
+- [ ] `make build TEE_PLATFORM=csv LIBC=musl` 编出静态 `attestation-agent`（csv-attester 已接入 Makefile `:34-37`）。
+- [ ] 机密 VM 内 CDH 启动时把 sealed-secret 验签公钥预置到 `/run/confidential-containers/cdh/sealed-secret/`。
+- [ ] `AA_KBC_PARAMS` 指向真 KBS（如 `cc_kbc::https://<kbs>`）。
+- [ ] `/dev/csv-guest` 存在且 AA 能打开 → evidence 接口返回真实 CSV 报告。
+- [ ] Trustee 侧 verifier 对 CSV 报告验明通过（RCAR 端到端）。
+- [ ] kata-runtime 拉起机密容器，guest 内组件与宿主 Trustee 经 vsock 互通。
+
+> 说明：本 runbook 在你腾讯云普通 VM 上得到的**所有产出（编译出的二进制、`offline_fs_kbc` 配置、sealed secret 信封格式与验签逻辑、ASR/CDH/AA 启动方式）都直接复用到真机**；真机只是把 `attester=csv`、KBC 指向真 KBS、密钥预置方式、证据链路这几处替换掉，无需重写流程。
 
 <a id="appendixa"></a>
 ## 附录 A：offline_fs_kbc 资源文件格式速查
@@ -303,11 +327,11 @@ async fn main() {
 <a id="refs"></a>
 ## 参考文件
 
-- `Makefile`（TEE_PLATFORM→ATTESTER 映射 `:18-36`；CSV TODO `:37`；产物名 `:52-60`）
+- `Makefile`（TEE_PLATFORM→ATTESTER 映射 `:18-37`，`csv→csv-attester` 已完成；产物名 `:52-60`）
 - `attestation-agent/attestation-agent/Cargo.toml`（bin 名 `ttrpc-aa`/`grpc-aa` `:9-19`；csv-attester 特性 `:105`）
 - `attestation-agent/attestation-agent/src/config/aa_kbc_params.rs`（AA_KBC_PARAMS 解析 `:23`/`:63`）
 - `confidential-data-hub/kms/src/plugins/kbs/offline_fs.rs`（offline_fs_kbc 资源文件 `:19-24`/`:71-87`）
 - `image-rs/src/resource/kbs/ttrpc.rs`（cdh.sock 约定 `:16`）
 - `image-rs/scripts/install_offline_fs_kbc_files.sh`（生成/安装 resources JSON）
-- `confidential-data-hub/hub/src/bin/secret_cli.rs`（sealed secret 样例）
+- `confidential-data-hub/hub/src/bin/secret_cli.rs`（sealed secret 样例；**二进制名是 `secret`**）
 - 仓库已翻译文档：`confidential-data-hub/custom-README.md`、`attestation-agent/docs/custom-IMPLEMENTATION.md`
