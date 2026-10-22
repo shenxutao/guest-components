@@ -1,111 +1,255 @@
-# D2 腾讯云 Ubuntu 连调 Runbook（草稿）
+# D2 腾讯云 Ubuntu 连调 Runbook（详细版）
 
-> 目标：在普通 Linux x86_64（腾讯云轻量 Ubuntu，**非机密 VM**）上，把 D2 涉及的 guest 组件跑起来，完成「自己的服务部署 + 依赖桩」的连调，验证集成管道。
-> 能力边界：无 TEE → 无真硬件证据；用 `none` attester 桩；用 `offline_fs_kbc` 替代外部 KBS（**无需 Beeceptor**）。真 CSV 证明仍需海光硬件 + Trustee 真部署 + kata-runtime。
-> 说明：以下命令为连调草案，bin 名 / 配置文件路径以各 crate 的 `src/bin`、`src/config` 实际产物为准，启动前先 `cargo build` 看真实产物。
+> **目标**：在普通 Linux x86_64（腾讯云轻量 Ubuntu，**非机密 VM**）上，把 D2 涉及的 guest 组件跑起来，完成「自己的服务部署 + 依赖桩」的连调，验证集成管道。
+> **能力边界**：无 TEE → 无真硬件证据；用 `all`/`none` attester 桩；用 `offline_fs_kbc` 替代外部 KBS（**无需 Beeceptor**）。真 CSV 证明仍需海光硬件 + Trustee 真部署 + kata-runtime。
+> **约定**：命令在腾讯云 Ubuntu 上执行；`$` 后为一行命令；凡标注「（确认）」处，以你机器上 `cargo build` 实际产物为准。
 
-## 0. 环境准备（腾讯云 Ubuntu x86_64）
+---
 
-- 装 rustup 并拉 1.95.0：仓库 `rust-toolchain.toml` 已锁版本，`cd` 进仓库会自动生效；如未自动，`rustup toolchain install 1.95.0`。
-- **本地连调不需要 musl**：直接 `cargo build`（native glibc）即可。musl 静态链接仅用于最终打包进 guest 镜像，开发期可跳过，省去 musl 交叉工具链。
-- 编译期系统依赖：`build-essential`、`pkg-config`、`libssl-dev`（OpenSSL 为固定后端）、`protobuf-compiler`（protos 生成 ttrpc/grpc 代码）。
-- 运行期：部分 CDH 测试 / sealed secret 需 root；建议直接在 root 或 `sudo` 下跑守护进程。
+## 步骤 0：准备 Ubuntu 环境（工具链 + 系统依赖）
 
-## 1. 构建
+```bash
+# 0.1 安装 rustup（若未装）
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
 
-- 默认 feature = `all-attesters`（含 `csv-attester`，见 `attestation-agent/attester/Cargo.toml:72-87`）。普通 `cargo build` 会编进所有 attester（慢但全）。
-- 想快一点，只编 D2 相关包：
-  `cargo build -p attestation-agent -p confidential-data-hub -p api-server-rest`
-- 产出二进制（名字以实际为准，常见：`attestation-agent`、`confidential-data-hub`、`api-server-rest`）在 `target/debug/`。
+# 0.2 进入仓库后 rust-toolchain.toml 会自动锁定 1.95.0，确认版本
+cargo --version
+rustc --version          # 期望输出含 1.95.0
 
-## 2. 关键配置：用 offline_fs_kbc 替代外部 KBS（核心，免 Beeceptor）
+# 0.3 安装编译期系统依赖
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler clang
+```
 
-- AA/CDH 通过 KBC 取资源/密钥。**默认就是 `offline_fs_kbc`**（`attestation-agent/attestation-agent/src/config/aa_kbc_params.rs:23`，取不到时回退 `offline_fs_kbc::null` `:63`）。→ 本地连调默认就不需要 Beeceptor / 真 Trustee。
-- 配置入口：`AA_KBC_PARAMS` 环境变量，格式 `KBC_NAME::KBS_URI`。
-  - 开发桩：`AA_KBC_PARAMS=offline_fs_kbc::null`
-  - 若要接真/模拟 KBS：`AA_KBC_PARAMS=cc_kbc::https://<host>`（见第 6 节 mock）
-  - 另外也读内核 cmdline `agent.aa_kbc_params=`；peer-pods 场景读 kata-agent 配置。
-- 资源从本地 JSON 提供（见 `confidential-data-hub/kms/src/plugins/kbs/offline_fs.rs:19-24`）：
-  - 默认文件：`/etc/aa-offline_fs_kbc-resources.json`、`/etc/aa-offline_fs_kbc-keys.json`
-  - 或设 `OFFLINE_FS_KBC_EXTRA_FILE_PATH=<path>` 指向一个 resources JSON，免改 `/etc`
-  - 生成方式：仓库脚本 `image-rs/scripts/install_offline_fs_kbc_files.sh`，或参考其输出手动写
-  - 格式：resource_path → base64(value) 的映射
+**说明**
+- `rustup`：Rust 工具链管理器；本仓库 `rust-toolchain.toml` 已固定 1.95.0，`cd` 进仓库会自动切换，无需手动 `rustup default`。
+- `build-essential`：提供 `gcc`/`make` 等原生编译工具。
+- `pkg-config` + `libssl-dev`：OpenSSL 是本仓库加密后端的**固定依赖**（非可选项），编译期需要其头文件与链接库。
+- `protobuf-compiler`：`protos` 仓库用它生成 ttrpc / gRPC 的 Rust 绑定代码。
+- `clang`：部分 TEE 绑定（如 `iocuddle`/ioctl 包装）在构建时需要。
 
-## 3. attester 选择（非 TEE 机器必须用 none）
+---
 
-- 非机密 VM 跑不了 tdx/snp/csv 的真证据。开发用 **`none` attester**（Makefile：`none`/`fs` → `none`，无硬件依赖）。
-- 在 AA 配置里把 `attester` 设成 `none`（配置文件/字段以 `attestation-agent/attestation-agent/src/config/` 为准；**部署到真机密 VM 时再切回 `csv`**）。
-- 说明：用 `none` 时 evidence 是桩，AA 与 KBS 的 RCAR 真握手不会成功——这正是「验不了真机密行为」的体现；但 ttrpc/REST 接口、资源取回、密钥解封等**管道可完整验证**。
+## 步骤 1：进入仓库并切到开发分支
 
-## 4. 启动三个守护进程
+```bash
+cd guest-components                         # 进入你 clone 的仓库根
+git checkout 2026-10-21-dev                # 你的个人 dev 分支
+git status -sb                              # 确认领先/落后状态
+```
 
-- 先建运行时目录（socket/凭据路径，遵循仓库约定）：`mkdir -p /run/confidential-containers`
+**说明**：所有改动在个人 fork 的 `2026-10-21-dev` 分支进行（与远端 `origin` 同步策略见 `custom-项目理解.md`）。
+
+---
+
+## 步骤 2：构建三个组件（开发用原生 glibc，免 musl 交叉）
+
+```bash
+# 方式 A（推荐，迭代快）：直接用 cargo 编 D2 相关包，原生目标无需 musl
+cargo build -p confidential-data-hub -p attestation-agent -p api-server-rest
+# 产物在 target/debug/ 下
+```
+
+**说明**
+- `cargo build` 默认用本机原生目标（x86_64-unknown-linux-gnu），**不需要 musl 交叉工具链**。musl 静态链接仅用于最终打包进 guest 镜像，开发期可跳过。
+- 二进制命名有两条口径，二选一即可：
+  - **cargo 口径**：AA 的 bin 名是 `ttrpc-aa` / `grpc-aa`（见 `attestation-agent/attestation-agent/Cargo.toml:9-19`）；CDH、ASR 的包名即 bin 名（`confidential-data-hub`、`api-server-rest`）。
+  - **Makefile 口径**：顶层 `Makefile:52-54` 规定产物名就是 `confidential-data-hub` / `attestation-agent` / `api-server-rest`（见步骤 5 用 `make build` 时）。
+- 若想贴近 CI / 产出与最终镜像一致的静态二进制：
+  ```bash
+  # 方式 B：TEE_PLATFORM=all 编入全部 attester（含 csv-attester，Cargo.toml:79），
+  #         避免 none 特性歧义；开发期用 LIBC=gnu 免去 musl 工具链
+  make build TEE_PLATFORM=all LIBC=gnu
+  ```
+  > 注意：`Makefile:37` 仍有 `# TODO: Add support for CSV`，所以**不能直接 `TEE_PLATFORM=csv`**；这是 D2-M1 要补的构建入口。
+
+---
+
+## 步骤 3：准备 offline_fs_kbc 资源文件（替代外部 KBS）
+
+**背景**：AA/CDH 通过 KBC 取资源/密钥，**默认 KBC 就是 `offline_fs_kbc`**（`attestation-agent/attestation-agent/src/config/aa_kbc_params.rs:23`，取不到时回退 `offline_fs_kbc::null` `:63`）。它从**本地 JSON 文件**读取资源，因此本地连调**完全不需要 Beeceptor / 真 Trustee**。
+
+资源文件格式（来自 `confidential-data-hub/kms/src/plugins/kbs/offline_fs.rs:71-87` 解析逻辑）：
+```json
+{ "<resource_path>": "<base64(value)>" }
+```
+测试样例见 `offline_fs.rs:147-151`，resource_path 形如 `default/key/1`（对应 `kbs:///default/key/1`）。
+
+```bash
+# 3.1 生成开发用资源文件：把明文值 base64 后写入
+cat > /tmp/dev-resources.json <<'EOF'
+{
+  "default/key/1": "$(printf '%s' 'my-dev-secret-key-001' | base64)",
+  "default/key/2": "$(printf '%s' 'another-secret'      | base64)"
+}
+EOF
+
+# 3.2 确认内容（value 应为 base64 串）
+cat /tmp/dev-resources.json
+```
+
+**说明**
+- `resource_path` 与后续 `kbs:///default/key/1` 这类 URI 一一对应；`value` **必须是 base64**。
+- 也可用仓库自带脚本安装到 `/etc`（会顺带写 `/etc/agent-config.toml` 设 `offline_fs_kbc::null`）：
+  ```bash
+  sudo bash image-rs/scripts/install_offline_fs_kbc_files.sh install
+  ```
+
+---
+
+## 步骤 4：配置 KBC 参数（让 AA/CDH 走 offline_fs_kbc）
+
+**背景**：KBC 由环境变量 `AA_KBC_PARAMS`（格式 `KBC_NAME::KBS_URI`）或 `/etc/agent-config.toml` 指定；也可经内核 cmdline `agent.aa_kbc_params=`。
+
+```bash
+export AA_KBC_PARAMS="offline_fs_kbc::null"
+export OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json"
+```
+
+**说明**
+- `offline_fs_kbc::null`：用离线 KBC，不连任何外部 KBS（`null` 表示无远端 URI）。这恰好是 `aa_kbc_params.rs:63` 的默认回退值。
+- `OFFLINE_FS_KBC_EXTRA_FILE_PATH`：让 `offline_fs_kbc` 额外从指定文件加载资源（`offline_fs.rs:24` 定义该环境变量，`:53` 读取；多个文件用 `,` 分隔），免改 `/etc` 下的默认文件。
+- **每个启动组件的终端都要先 `export` 这两个变量**（或写进同一 shell / systemd unit）。
+
+---
+
+## 步骤 5：创建运行时目录并启动三个守护进程
+
+**背景**
+- CDH 监听 Unix socket `unix:///run/confidential-containers/cdh.sock`（image-rs 客户端约定，见 `image-rs/src/resource/kbs/ttrpc.rs:16`）。
+- ASR 监听 `127.0.0.1:8006`（loopback，非 loopback 访问返回 403）。
 - 启动顺序建议：**CDH → AA → ASR**（ASR 是 REST 网关，依赖后两者）。
-- 示例（开发用，关掉生产加固）：
-  ```
-  # CDH
-  AA_KBC_PARAMS=offline_fs_kbc::null \
-  OFFLINE_FS_KBC_EXTRA_FILE_PATH=./dev-resources.json \
-  cargo run -p confidential-data-hub --bin confidential-data-hub
 
-  # AA
-  AA_KBC_PARAMS=offline_fs_kbc::null cargo run -p attestation-agent
+```bash
+# 5.0 创建运行时目录（socket / 凭据路径）
+sudo mkdir -p /run/confidential-containers
 
-  # ASR
-  cargo run -p api-server-rest
-  ```
-- 端口/socket：
-  - CDH 监听 `unix:///run/confidential-containers/cdh.sock`（image-rs 客户端约定，见 `image-rs/src/resource/kbs/ttrpc.rs:16`）
-  - ASR 监听 `127.0.0.1:8006`（loopback，非 loopback 访问 403）
-- ⚠️ 具体 bin 名、配置文件路径以各 crate 的 `src/bin` 与 `src/config` 为准，启动前 `cargo build` 看实际产物名。
+# 5.1 启动 CDH（机密数据中枢）
+AA_KBC_PARAMS="offline_fs_kbc::null" \
+OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json" \
+cargo run -p confidential-data-hub --bin confidential-data-hub
+# 说明：bin 名 confidential-data-hub（Makefile:52）；启动后应监听 cdh.sock
+#      若端口/socket 冲突，先 sudo rm -f /run/confidential-containers/cdh.sock
 
-## 5. 验证（连调检查表）
+# 5.2 启动 AA（证明代理，ttrpc 服务）
+AA_KBC_PARAMS="offline_fs_kbc::null" \
+cargo run -p attestation-agent --bin ttrpc-aa
+# 说明：AA 的 cargo bin 是 ttrpc-aa / grpc-aa（Cargo.toml:9-19）；若用 make build 则产物名 attestation-agent
+#      非 TEE 机器调用 evidence 接口会返回桩数据或明确错误，属预期（无硬件证据）
 
-- **ASR REST（loopback）**：
-  - `curl http://127.0.0.1:8006/info` → 应返回 `VersionInfo`
-  - `curl http://127.0.0.1:8006/cdh/resource/default/key/test` → 应能经 CDH 取回你在 `dev-resources.json` 里放的资源
-- **image-rs 直连 CDH**：用 image-rs 的 ttrpc 客户端（或 `confidential-data-hub/hub/src/bin/ttrpc-cdh-tool.rs`）连 `cdh.sock` 取资源，验证 `kbs://` → `offline_fs_kbc` 通路。
-- **sealed secret（D2 重点）**：用 `confidential-data-hub/hub/src/bin/secret_cli.rs` 的 `secret_cli` 跑密封/解封样例，理顺 `/run/confidential-containers/cdh/sealed-secret` 凭据与签名校验。
-- **AA token/evidence**：调 ASR `/aa/evidence`、`/aa/token` 看 `none` attester 下的返回（桩数据）。
+# 5.3 启动 ASR（REST 网关）
+cargo run -p api-server-rest --bin api-server-rest
+# 说明：监听 127.0.0.1:8006；仅 loopback，外部访问 403
+```
 
-## 6. （可选）最小 mock KBS —— 仅在要测 cc_kbc 真 HTTP 路径时用
+**说明**
+- 建议三个组件各开一个终端（或 `nohup ... &` / systemd unit 后台运行），便于看日志。
+- 用 `make build` 产出的二进制时，把 `cargo run -p X --bin Y` 换成直接执行 `./target/x86_64-unknown-linux-gnu/release/<bin>` 并前置同样的环境变量。
 
-- 若想验证 `cc_kbc::https://<mock>` 这条「AA→真 KBS 形态」的客户端，可用 Beeceptor 或自起一个最小 KBS HTTP 服务返回固定资源。**仅验证请求/响应形状，不做真证明。**
-- 最小 Rust 草图（用 workspace 已有的 hyper，仅示意资源端点；真实 KBS 还有 RCAR challenge/response，这里不实现）：
-  ```rust
-  use hyper::{Body, Request, Response, Server, service::{make_service_fn, service_fn}};
+---
 
-  async fn handle(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
-      // 真实 KBS: GET /kbs/v0/resource/<path> 返回 base64 资源；此处返回固定桩
-      Ok(Response::new(Body::from("base64-encoded-secret")))
-  }
+## 步骤 6：验证（连调检查表）
 
-  #[tokio::main]
-  async fn main() {
-      let addr = ([0, 0, 0, 0], 8080).into();
-      Server::bind(&addr)
-          .serve(make_service_fn(|_| async {
-              Ok::<_, hyper::Error>(service_fn(handle))
-          }))
-          .await
-          .unwrap();
-  }
-  ```
-- 然后 `AA_KBC_PARAMS=cc_kbc::http://<mock-host>:8080` 让 AA/CDH 走这个桩。
+### 6.1 ASR REST 探活 + 取资源
+```bash
+curl -s http://127.0.0.1:8006/info | head
+# 期望：返回 VersionInfo（含 tee / version / feature 字段）
 
-## 7. 边界与下一步
+curl -s http://127.0.0.1:8006/cdh/resource/default/key/1
+# 期望：返回你在 /tmp/dev-resources.json 里放的 default/key/1 资源
+#       （请求经 ASR → CDH → offline_fs_kbc 取回）
+```
 
-- ✅ 本 runbook 能验：组件编译/启动/互通、接口、资源取回、密钥解封管道。
-- ❌ 验不了：真机密证明（需 TEE）、kata-runtime 接入（vsock/gRPC，非 HTTP）。
-- 下一步（真机阶段）：海光 CSV 硬件 + 把 `attester` 切回 `csv`（并补 `Makefile` 的 `csv → csv-attester` 映射，见 `Makefile:37` TODO）+ 部署真 Trustee/KBS + 接 kata-runtime，做 RCAR 端到端验明。
+### 6.2 image-rs 直连 CDH（验证 kbs:// → offline_fs_kbc 通路）
+```bash
+cargo run -p confidential-data-hub --bin ttrpc-cdh-tool -- \
+  --socket /run/confidential-containers/cdh.sock \
+  GetResource --resource-uri "kbs:///default/key/1"
+# 说明：ttrpc-cdh-tool 是仓库自带 ttrpc 客户端（confidential-data-hub/hub/src/bin/ttrpc-cdh-tool.rs）
+#      若 CLI 参数不符，以该文件实际定义为准
+```
+
+### 6.3 sealed secret（D2 重点）
+```bash
+cargo run -p confidential-data-hub --bin secret_cli -- --help
+# 用 secret_cli 跑 密封/解封 样例，理顺
+# /run/confidential-containers/cdh/sealed-secret 凭据路径 与 签名校验逻辑
+# 来源：confidential-data-hub/hub/src/bin/secret_cli.rs
+```
+
+### 6.4 AA evidence / token（桩）
+```bash
+curl -s "http://127.0.0.1:8006/aa/evidence?runtime_data=test"
+curl -s "http://127.0.0.1:8006/aa/token?token_type=default"
+# 期望：none / all-attester 下返回桩数据或明确错误（非 TEE 无真证据，属预期）
+```
+
+---
+
+## 步骤 7（可选）：用 mock KBS 测 cc_kbc 真 HTTP 路径
+
+**背景**：仅当你想验证 `cc_kbc::https://<mock>` 这条「AA → 真 KBS 形态」的客户端 HTTP 行为时才需要（替代 Beeceptor）。**只验证请求/响应形状，不做真证明**（无 RCAR challenge/response 握手）。
+
+```bash
+# 7.1 起一个最小 mock KBS（监听 :8080，见附录 B），对资源请求返回固定 base64 值
+cargo run --bin mock-kbs
+
+# 7.2 让 AA/CDH 走这个桩
+export AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080"
+# 然后按步骤 5 重启 CDH / AA
+```
+
+---
+
+## 步骤 8：边界与真机阶段下一步
+
+- ✅ **本流程能验**：组件编译/启动/互通、REST/ttrpc 接口、资源取回、密钥解封管道。
+- ❌ **验不了**：真机密证明（需 TEE 硬件）、kata-runtime 接入（vsock/gRPC，非 HTTP）。
+- **真机阶段**（D2 收尾）：
+  1. 海光 CSV 硬件环境；
+  2. 补 `Makefile` 的 `csv → csv-attester` 映射（当前 `Makefile:37` 为 TODO）；
+  3. 把 attester 切回 `csv`（构建 `TEE_PLATFORM=csv`）；
+  4. 部署真 Trustee/KBS + 接 kata-runtime，做 RCAR 端到端验明。
+
+---
+
+## 附录 A：offline_fs_kbc 资源文件格式速查
+
+- 默认读取文件：`/etc/aa-offline_fs_kbc-keys.json`、`/etc/aa-offline_fs_kbc-resources.json`（`offline_fs.rs:19-20`）。
+- 额外文件：`OFFLINE_FS_KBC_EXTRA_FILE_PATH`（`:24`，`,` 分隔多个）。
+- JSON 结构：`{ "resource_path": "base64(value)" }`，解析见 `:71-87`。
+- 资源寻址：URI `kbs:///<resource_path>`（如 `kbs:///default/key/1`）→ 查表取 base64 解码后的值。
+
+## 附录 B：最小 mock KBS（Rust，hyper，仅示意）
+
+```rust
+use hyper::{Body, Request, Response, Server, service::{make_service_fn, service_fn}};
+
+async fn handle(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+    // 真实 KBS: GET /kbs/v0/resource/<path> 返回 base64 资源；此处返回固定桩
+    Ok(Response::new(Body::from("base64-encoded-secret")))
+}
+
+#[tokio::main]
+async fn main() {
+    let addr = ([0, 0, 0, 0], 8080).into();
+    Server::bind(&addr)
+        .serve(make_service_fn(|_| async {
+            Ok::<_, hyper::Error>(service_fn(handle))
+        }))
+        .await
+        .unwrap();
+}
+```
 
 ## 参考文件
 
-- `Makefile`（TEE_PLATFORM→ATTESTER 映射；CSV TODO 在 `:37`）
-- `attestation-agent/attester/Cargo.toml`（feature 定义，`:72-117`）
-- `attestation-agent/attestation-agent/src/config/aa_kbc_params.rs`（AA_KBC_PARAMS 解析，`:23`/`:63`）
-- `confidential-data-hub/kms/src/plugins/kbs/offline_fs.rs`（offline_fs_kbc 资源文件，`:19-24`）
-- `image-rs/scripts/install_offline_fs_kbc_files.sh`（生成 resources JSON）
+- `Makefile`（TEE_PLATFORM→ATTESTER 映射 `:18-36`；CSV TODO `:37`；产物名 `:52-60`）
+- `attestation-agent/attestation-agent/Cargo.toml`（bin 名 `ttrpc-aa`/`grpc-aa` `:9-19`；csv-attester 特性 `:105`）
+- `attestation-agent/attestation-agent/src/config/aa_kbc_params.rs`（AA_KBC_PARAMS 解析 `:23`/`:63`）
+- `confidential-data-hub/kms/src/plugins/kbs/offline_fs.rs`（offline_fs_kbc 资源文件 `:19-24`/`:71-87`）
+- `image-rs/src/resource/kbs/ttrpc.rs`（cdh.sock 约定 `:16`）
+- `image-rs/scripts/install_offline_fs_kbc_files.sh`（生成/安装 resources JSON）
 - `confidential-data-hub/hub/src/bin/secret_cli.rs`（sealed secret 样例）
-- `image-rs/src/resource/kbs/ttrpc.rs`（cdh.sock 约定，`:16`）
 - 仓库已翻译文档：`confidential-data-hub/custom-README.md`、`attestation-agent/docs/custom-IMPLEMENTATION.md`
