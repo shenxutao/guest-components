@@ -33,8 +33,9 @@ else ifeq ($(TEE_PLATFORM), amd)
   ATTESTER = snp-attester
 else ifeq ($(TEE_PLATFORM), cca)
   ATTESTER = cca-attester
+else ifeq ($(TEE_PLATFORM), csv)
+  ATTESTER = csv-attester
 endif
-# TODO: Add support for CSV
 
 ifeq ($(shell test -e /etc/debian_version && echo -n yes),yes)
     DEBIANOS = true

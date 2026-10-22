@@ -53,7 +53,7 @@ git log --oneline <基准commit>..upstream/main -- confidential-data-hub/docs/SE
 | 32 | [ocicrypt-rs/data/custom-generate_keys.md](ocicrypt-rs/data/custom-generate_keys.md) | [ocicrypt-rs/data/generate_keys.md](ocicrypt-rs/data/generate_keys.md) | 5d882e15@2023-06-02 | 翻译 | 测试密钥生成脚本说明：用 openssl 生成单测/集成测试所需的 RSA/EC 密钥、证书与口令文件 |
 | 33 | [custom-项目理解.md](custom-项目理解.md) | （无原文） | — | **个人新增** | 个人原创：基于源码核实的项目架构理解（含组件/feature/时序） |
 | 34 | [custom-个人开发指南.md](custom-个人开发指南.md) | （无原文） | — | **个人新增** | 个人原创：D2 主责（CSV attester + CDH sealed secret）开发指南 |
-| 35 | [custom-D2连调runbook.md](custom-D2连调runbook.md) | （无原文） | — | **个人新增** | 个人原创：腾讯云 Ubuntu 非机密 VM 上的 D2 连调草案（offline_fs_kbc + none attester 免 Beeceptor；含 mock KBS 草图） |
+| 35 | [custom-D2连调runbook.md](custom-D2连调runbook.md) | （无原文） | — | **个人新增** | 个人原创：腾讯云 Ubuntu 非机密 VM 上的 D2 连调详细指南（**顶部带锚点目录可跳转**；逐步骤命令+说明；offline_fs_kbc + none/all attester 免 Beeceptor；含 mock KBS 草图） |
 
 > 注：序号 33、34、35 为个人原创笔记（项目理解 / 个人开发指南 / D2 连调 runbook），无固定原文，无过期概念，随项目认知更新即可。
 
