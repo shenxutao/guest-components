@@ -4,8 +4,26 @@
 > **能力边界**：无 TEE → 无真硬件证据；用 `all`/`none` attester 桩；用 `offline_fs_kbc` 替代外部 KBS（**无需 Beeceptor**）。真 CSV 证明仍需海光硬件 + Trustee 真部署 + kata-runtime。
 > **约定**：命令在腾讯云 Ubuntu 上执行；`$` 后为一行命令；凡标注「（确认）」处，以你机器上 `cargo build` 实际产物为准。
 
----
+## 目录
 
+- [步骤 0：准备 Ubuntu 环境（工具链 + 系统依赖）](#step0)
+- [步骤 1：进入仓库并切到开发分支](#step1)
+- [步骤 2：构建三个组件（开发用原生 glibc，免 musl 交叉）](#step2)
+- [步骤 3：准备 offline_fs_kbc 资源文件（替代外部 KBS）](#step3)
+- [步骤 4：配置 KBC 参数（让 AA/CDH 走 offline_fs_kbc）](#step4)
+- [步骤 5：创建运行时目录并启动三个守护进程](#step5)
+- [步骤 6：验证（连调检查表）](#step6)
+  - [6.1 ASR REST 探活 + 取资源](#step61)
+  - [6.2 image-rs 直连 CDH（验证 kbs:// → offline_fs_kbc 通路）](#step62)
+  - [6.3 sealed secret（D2 重点）](#step63)
+  - [6.4 AA evidence / token（桩）](#step64)
+- [步骤 7（可选）：用 mock KBS 测 cc_kbc 真 HTTP 路径](#step7)
+- [步骤 8：边界与真机阶段下一步](#step8)
+- [附录 A：offline_fs_kbc 资源文件格式速查](#appendixa)
+- [附录 B：最小 mock KBS（Rust，hyper，仅示意）](#appendixb)
+- [参考文件](#refs)
+
+<a id="step0"></a>
 ## 步骤 0：准备 Ubuntu 环境（工具链 + 系统依赖）
 
 ```bash
@@ -29,8 +47,7 @@ sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler 
 - `protobuf-compiler`：`protos` 仓库用它生成 ttrpc / gRPC 的 Rust 绑定代码。
 - `clang`：部分 TEE 绑定（如 `iocuddle`/ioctl 包装）在构建时需要。
 
----
-
+<a id="step1"></a>
 ## 步骤 1：进入仓库并切到开发分支
 
 ```bash
@@ -41,8 +58,7 @@ git status -sb                              # 确认领先/落后状态
 
 **说明**：所有改动在个人 fork 的 `2026-10-21-dev` 分支进行（与远端 `origin` 同步策略见 `custom-项目理解.md`）。
 
----
-
+<a id="step2"></a>
 ## 步骤 2：构建三个组件（开发用原生 glibc，免 musl 交叉）
 
 ```bash
@@ -64,8 +80,7 @@ cargo build -p confidential-data-hub -p attestation-agent -p api-server-rest
   ```
   > 注意：`Makefile:37` 仍有 `# TODO: Add support for CSV`，所以**不能直接 `TEE_PLATFORM=csv`**；这是 D2-M1 要补的构建入口。
 
----
-
+<a id="step3"></a>
 ## 步骤 3：准备 offline_fs_kbc 资源文件（替代外部 KBS）
 
 **背景**：AA/CDH 通过 KBC 取资源/密钥，**默认 KBC 就是 `offline_fs_kbc`**（`attestation-agent/attestation-agent/src/config/aa_kbc_params.rs:23`，取不到时回退 `offline_fs_kbc::null` `:63`）。它从**本地 JSON 文件**读取资源，因此本地连调**完全不需要 Beeceptor / 真 Trustee**。
@@ -96,8 +111,7 @@ cat /tmp/dev-resources.json
   sudo bash image-rs/scripts/install_offline_fs_kbc_files.sh install
   ```
 
----
-
+<a id="step4"></a>
 ## 步骤 4：配置 KBC 参数（让 AA/CDH 走 offline_fs_kbc）
 
 **背景**：KBC 由环境变量 `AA_KBC_PARAMS`（格式 `KBC_NAME::KBS_URI`）或 `/etc/agent-config.toml` 指定；也可经内核 cmdline `agent.aa_kbc_params=`。
@@ -112,8 +126,7 @@ export OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json"
 - `OFFLINE_FS_KBC_EXTRA_FILE_PATH`：让 `offline_fs_kbc` 额外从指定文件加载资源（`offline_fs.rs:24` 定义该环境变量，`:53` 读取；多个文件用 `,` 分隔），免改 `/etc` 下的默认文件。
 - **每个启动组件的终端都要先 `export` 这两个变量**（或写进同一 shell / systemd unit）。
 
----
-
+<a id="step5"></a>
 ## 步骤 5：创建运行时目录并启动三个守护进程
 
 **背景**
@@ -147,10 +160,10 @@ cargo run -p api-server-rest --bin api-server-rest
 - 建议三个组件各开一个终端（或 `nohup ... &` / systemd unit 后台运行），便于看日志。
 - 用 `make build` 产出的二进制时，把 `cargo run -p X --bin Y` 换成直接执行 `./target/x86_64-unknown-linux-gnu/release/<bin>` 并前置同样的环境变量。
 
----
-
+<a id="step6"></a>
 ## 步骤 6：验证（连调检查表）
 
+<a id="step61"></a>
 ### 6.1 ASR REST 探活 + 取资源
 ```bash
 curl -s http://127.0.0.1:8006/info | head
@@ -161,6 +174,7 @@ curl -s http://127.0.0.1:8006/cdh/resource/default/key/1
 #       （请求经 ASR → CDH → offline_fs_kbc 取回）
 ```
 
+<a id="step62"></a>
 ### 6.2 image-rs 直连 CDH（验证 kbs:// → offline_fs_kbc 通路）
 ```bash
 cargo run -p confidential-data-hub --bin ttrpc-cdh-tool -- \
@@ -170,6 +184,7 @@ cargo run -p confidential-data-hub --bin ttrpc-cdh-tool -- \
 #      若 CLI 参数不符，以该文件实际定义为准
 ```
 
+<a id="step63"></a>
 ### 6.3 sealed secret（D2 重点）
 ```bash
 cargo run -p confidential-data-hub --bin secret_cli -- --help
@@ -178,6 +193,7 @@ cargo run -p confidential-data-hub --bin secret_cli -- --help
 # 来源：confidential-data-hub/hub/src/bin/secret_cli.rs
 ```
 
+<a id="step64"></a>
 ### 6.4 AA evidence / token（桩）
 ```bash
 curl -s "http://127.0.0.1:8006/aa/evidence?runtime_data=test"
@@ -185,8 +201,7 @@ curl -s "http://127.0.0.1:8006/aa/token?token_type=default"
 # 期望：none / all-attester 下返回桩数据或明确错误（非 TEE 无真证据，属预期）
 ```
 
----
-
+<a id="step7"></a>
 ## 步骤 7（可选）：用 mock KBS 测 cc_kbc 真 HTTP 路径
 
 **背景**：仅当你想验证 `cc_kbc::https://<mock>` 这条「AA → 真 KBS 形态」的客户端 HTTP 行为时才需要（替代 Beeceptor）。**只验证请求/响应形状，不做真证明**（无 RCAR challenge/response 握手）。
@@ -200,8 +215,7 @@ export AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080"
 # 然后按步骤 5 重启 CDH / AA
 ```
 
----
-
+<a id="step8"></a>
 ## 步骤 8：边界与真机阶段下一步
 
 - ✅ **本流程能验**：组件编译/启动/互通、REST/ttrpc 接口、资源取回、密钥解封管道。
@@ -212,8 +226,7 @@ export AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080"
   3. 把 attester 切回 `csv`（构建 `TEE_PLATFORM=csv`）；
   4. 部署真 Trustee/KBS + 接 kata-runtime，做 RCAR 端到端验明。
 
----
-
+<a id="appendixa"></a>
 ## 附录 A：offline_fs_kbc 资源文件格式速查
 
 - 默认读取文件：`/etc/aa-offline_fs_kbc-keys.json`、`/etc/aa-offline_fs_kbc-resources.json`（`offline_fs.rs:19-20`）。
@@ -221,6 +234,7 @@ export AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080"
 - JSON 结构：`{ "resource_path": "base64(value)" }`，解析见 `:71-87`。
 - 资源寻址：URI `kbs:///<resource_path>`（如 `kbs:///default/key/1`）→ 查表取 base64 解码后的值。
 
+<a id="appendixb"></a>
 ## 附录 B：最小 mock KBS（Rust，hyper，仅示意）
 
 ```rust
@@ -243,6 +257,7 @@ async fn main() {
 }
 ```
 
+<a id="refs"></a>
 ## 参考文件
 
 - `Makefile`（TEE_PLATFORM→ATTESTER 映射 `:18-36`；CSV TODO `:37`；产物名 `:52-60`）
