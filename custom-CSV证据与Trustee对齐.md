@@ -80,6 +80,15 @@ CsvEvidence {
 - 不能：真 CSV 报告/签名、KDS 取链、SM3 度量比对——这些要海光硬件 + 真 Trustee（见 `custom-真机CSV部署.md`）。
 - 排查入口：`/dev/csv-guest` 存在性（`detect_platform()`，`csv/mod.rs:30-32`）→ 不存在则 attester 直接失败。
 
+## 6. 补充：CSV 平台易错点（与 `D2-任务与交付参考.md` §6.1 对齐）
+
+这些是从实码核对出的细节，attester 与 verifier 两端都容易踩坑，列在此统一口径：
+
+- **两套哈希各管一段**：RCAR 的 `runtime_data` 摘要用 **Challenge 选定的算法（默认 SHA384）**；而 CSV 的 CC Eventlog（CCEL/AAEL）哈希用 **SM3**（见 §1.4）。联调时 KBS/AS 侧 `selected-hash-algorithm` 与 verifier 的 SM3 重放校验都要成立，**别把两种哈希混为一谈**。
+- **initdata 不受支持**：trustee 的 CSV verifier 明确 `warn!("CSV does not support init data hash mechanism. skip.")`——想绑定 initdata，只能靠 `report_data`/RTMR 间接绑，不能指望 AS 校验 initdata 哈希。
+- **报告版本决定能验什么**：`AttestationReport::V1`（CSV/CSV2）只有 `measure`，**没有 RTMR/eventlog**；`V2`（CSV3）才有 `rtmr0–rtmr4` 并对 CCEL 做 SM3 重放。**M1 押 CSV3 才有运行期度量可验**。
+- **证书链本地优先**：verifier 优先读 `/opt/hygon/csv/hsk_cek/<chip_id>/hsk_cek.cert`，否则访问 `https://cert.hygon.cn`——内网/离线环境必须预置证书，否则证据验证直接失败（D5 导出 + D3 预置）。
+
 ## 参考文件
 
 - `attestation-agent/attester/src/csv/mod.rs`（CsvEvidence、get_evidence、CSV_INCLUDE_CERT_CHAIN_ENV、pcr_to_ccmr、Sm3）

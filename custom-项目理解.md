@@ -148,7 +148,7 @@
   - `download_hskcek_from_kds()`（`:67`）：从 `https://cert.hygon.cn/hsk_cek?snumber=` 拉取 HSK/CEK 证书链（受 `CSV_INCLUDE_CERT_CHAIN_ENV` 环境变量控制是否包含证书链）
   - `impl Attester`（`:94-179`）：**实现了全部 6 个** trait 方法：`get_evidence`、`supports_runtime_measurement(true)`、`extend_runtime_measurement`（调 `csv_guest.req_rtmr_extend`）、`get_runtime_measurement`（`req_rtmr_read`）、`pcr_to_ccmr`（`:167` PCR→CCMR 映射）、`ccel_hash_algorithm → HashAlgorithm::Sm3`（`:177`）
 - **结论**：CSV attester **功能完整**（含 RTMR 扩展、SM3 CCEL、证书链下载），通过 `csv-attester` feature 启用（`attester/Cargo.toml:106`、`AA/Cargo.toml:105`）。
-- **已知缺口**：顶层 `Makefile:37` 明确注释 `# TODO: Add support for CSV`——即 `TEE_PLATFORM=csv` 不会自动把 `ATTESTER` 设为 `csv-attester`；只有 `make build TEE_PLATFORM=all` 或显式传 feature 才会编入。**这是 D2 需要补的构建入口**（在 Makefile 的 `TEE_PLATFORM` 映射里加 `csv → csv-attester`）。
+- **构建入口（已补）**：D2 已在个人分支把 `csv → csv-attester` 接入顶层 `Makefile`（`:36-37`，提交 `b933e96d`），现 `make build TEE_PLATFORM=csv LIBC=musl` 可直接编入海光 attester；上游 `main` 仍无此分支，直接用 `main` 时需回退到子目录 `make ATTESTER=csv-attester`（见 §11）。
 
 ### 4.6 AS（Attestation Service）与 token 获取
 
@@ -379,9 +379,9 @@ image-rs 用 KEK 经 ocicrypt-rs 解密镜像层
 ## 十一、构建系统（Makefile）
 
 - **顶层变量**（`Makefile:1-12`）：`TEE_PLATFORM ?= fs`、`ARCH ?= $(uname -m)`、`LIBC ?= musl`、`ATTESTER`、`ENABLE_KBS ?= true`（默认开 `kbs`/`cc_kbc`，`offline_fs_kbc` 始终编入）
-- **`TEE_PLATFORM → ATTESTER` 映射**（`Makefile:18-36`）：
-  - `none`/`fs` → `none`；`tdx` → `tdx-attester`；`az-cvm-vtpm` → `az-snp-vtpm-attester,az-tdx-vtpm-attester`；`snp`/`amd` → `snp-attester`；`se` → `se-attester`；`cca` → `cca-attester`；`all` → `all-attesters`
-  - **CSV 未接入**：`Makefile:37` 注释 `# TODO: Add support for CSV`（即 `TEE_PLATFORM=csv` 不会自动选 `csv-attester`，仅 `all` 或显式 feature 才编入）
+- **`TEE_PLATFORM → ATTESTER` 映射**（`Makefile:18-37`）：
+  - `none`/`fs` → `none`；`tdx` → `tdx-attester`；`az-cvm-vtpm` → `az-snp-vtpm-attester,az-tdx-vtpm-attester`；`snp`/`amd` → `snp-attester`；`se` → `se-attester`；`cca` → `cca-attester`；**`csv` → `csv-attester`**（D2 已接入，`:36-37`）；`all` → `all-attesters`
+  - 说明：`csv` 分支是 D2 在个人分支新增（提交 `b933e96d`）；上游 `main` 暂无，直接用 `main` 时改走 `make ATTESTER=csv-attester`
 - **交叉编译 target**：`BUILD_DIR = target/$(ARCH)-unknown-linux-$(LIBC)/release`（`:56`）；产物 `confidential-data-hub`/`attestation-agent`/`api-server-rest`。s390x/powerpc64le 强制 `LIBC=gnu`（`:47-50`）
 - **build 目标**（`Makefile:62-75`）：串行调三个子 make——CDH（`make ENABLE_KBS=…`）、AA（`make ttrpc=true ARCH=… ATTESTER=…`）、ASR（`make ARCH=… LIBC=…`）
 - **build-protos**（`:82-93`）：Debian 下自动 `apt-get install protobuf-compiler`，再 `cargo build -p protos --features build`
@@ -432,7 +432,7 @@ image-rs 用 KEK 经 ocicrypt-rs 解密镜像层
 
 1. **海光 CSV attester（M1）**：
    - 位置 `attestation-agent/attester/src/csv/mod.rs`，已实现 `Attester` 全部 6 方法且功能完整
-   - **待补构建入口**：在 `Makefile` 的 `TEE_PLATFORM` 映射里加 `csv → csv-attester`（消除 `Makefile:37` 的 TODO）
+   - **构建入口已补**：个人分支 `Makefile:36-37` 已加 `csv → csv-attester`（提交 `b933e96d`），`make build TEE_PLATFORM=csv LIBC=musl` 可用
    - 参考其它 attester（tdx/snp）的接口与 trait 风格；注意真实 TEE 与 sample 桩的边界
 2. **CDH sealed secret（密封卷）**：
    - 围绕 `confidential-data-hub/hub/src/secret/mod.rs` 与 `layout/{envelope,vault}.rs`，依赖 `secret-cli` 暴露
