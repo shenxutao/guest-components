@@ -555,3 +555,62 @@ CDH 组（转发给 confidential-data-hub）：
 - **Host 侧 cloud-api-adaptor**：负责拉起机密 VM、注入配置，但不打 guest 内 loopback REST。
 
 > 设计意图：ASR 让「只会 HTTP 的普通应用」也能消费 TCB 能力；真正「对外证明」的链路是 **AA → KBS/Trustee**（经 `kbs_protocol`），与此 REST 面无关。
+
+---
+
+## 十八、部署模型与仓库边界
+
+> 说明：kata-agent 与 guest 的「部署/启动」是 **kata-containers / cloud-api-adaptor** 的职责，**不在本仓库**；本仓库只负责**产出** AA/CDH/ASR 二进制与 image-rs 等库。此处描述 CoCo + Kata 的标准部署模型，用于建立整体认知。
+
+### 18.1 整体运行模型
+
+```
+Host 侧
+├─ containerd
+├─ containerd-shim-kata-v2  (kata runtime，真正"拉起 VM"的进程)
+├─ VMM (QEMU / Cloud Hypervisor / Dragonball)
+│
+│   启动一台 机密 VM（TDX / SNP / CSV / CCA）
+│
+Guest 侧（机密 VM 内 = TEE）
+├─ 轻量 mini-OS (rootfs / initrd)
+├─ kata-agent            ← 烘焙进 guest rootfs
+├─ attestation-agent     ← 本仓库产物
+├─ confidential-data-hub ← 本仓库产物
+├─ api-server-rest       ← 本仓库产物
+└─ image-rs (库，链接进 kata-agent)
+```
+
+### 18.2 kata-agent 怎么进 guest —— 构建期烤进镜像
+
+kata-agent **不是运行时下载的，而是在构建 guest 镜像时烤进 rootfs/initrd**：
+- 用 kata 的 **osbuilder** 等工具构建「kata 专用 guest 镜像」（kernel + rootfs）。
+- 镜像内含 kata-agent 二进制；VM 启动后它作为 guest 内代理进程起来，通过 **vsock** 向 Host runtime 注册。
+
+### 18.3 guest（机密 VM）怎么被拉起 —— Host runtime 调 VMM
+
+- Host 收到"跑机密容器"请求时，`containerd-shim-kata-v2` 调用 VMM 启动一台 VM。
+- 启动参数带上：**guest kernel + guest rootfs + 机密计算标志（TDX/SNP/CSV/CCA）+ vsock 设备**。
+- 硬件据此把 VM 变成 TEE，并生成**初始度量值（measurement）**——这正是后续远程证明（AA→KBS/Trustee）要对齐的根。
+- VM 起来后 kata-agent 经 vsock 连回 Host runtime 握手；之后容器创建 / 镜像拉取都走这条 vsock+gRPC 通道（见 10.3）。
+
+### 18.4 guest-components 产物怎么进 guest
+
+- `make build` 产出的 AA/CDH/ASR 二进制 `install` 到 `/usr/local/bin`，随后被 **CoCo 的 guest 镜像构建流程收编进 rootfs**（呼应第十六节交付产物）。
+- 它们在 guest 内作为**守护进程启动**（guest init / systemd 拉起）。
+- `image-rs` 是**库**而非进程，链接进 kata-agent（见 10.2），不单独部署。
+
+### 18.5 本仓库的角色边界
+
+| 阶段 | 负责方 | 本仓库(guest-components)角色 |
+|---|---|---|
+| 产出二进制/库 | **本仓库** | 产出 AA/CDH/ASR + image-rs/ocicrypt-rs |
+| 打包进 guest 镜像 | kata-containers / CoCo 镜像构建 | 只消费本仓库产物 |
+| 启动机密 VM | Host runtime + VMM | 不涉及 |
+| 启动 guest 内 AA/CDH/ASR | guest init / systemd | 不涉及（产物已被打包） |
+| 远程证明 / 密钥释放 | AA/CDH + 外部 Trustee/KBS | 本仓库提供 AA/CDH 客户端逻辑 |
+
+### 18.6 两种 CoCo 形态
+
+- **本地 VMM（Kata）**：VM 跑在本地宿主机上（18.1–18.4 描述的模型）。
+- **云端 VM（cloud-api-adaptor / peer pods，如 Azure）**：机密 VM 由云厂商在云端拉起，CAA 把 pod 注入云 VM；guest 组件同样跑在云 VM 内，Host 侧不是本地 VMM 而是 CAA 调云 API。
