@@ -377,3 +377,75 @@
 3. **涉及 `kbs-types` 字段变更**：务必先与上游 D4 协调，避免协议漂移（它跨项目共享，版本 `0.18.0`）
 
 > 提示：本机 shell 里 `cargo`/`rustc` 可能不在 PATH，需要先 `source ~/.cargo/env` 或用绝对路径；Bash 沙箱代理可能挡 GitHub 与 crates.io。
+
+---
+
+## 十六、交付产物与运行位置（产物 → 消费方 → 在哪跑）
+
+本项目**不发布成终端用户 App**，而是机密容器运行时的 TCB 组件源。其产出分两类：**可直接运行的守护进程二进制** 与 **被上游链接的库**。
+
+### 16.1 产物总览
+
+```
+本仓库 (guest-components workspace) 编译产出
+│
+├─ 二进制守护进程（make build → 默认 musl 静态）
+│   ├─ confidential-data-hub (CDH)        ← Makefile:52 产物名
+│   ├─ attestation-agent     (AA)         ← ttrpc-aa / grpc-aa 两种 RPC 变体
+│   └─ api-server-rest       (ASR)
+│         │  install 到 /usr/local/bin，由 kata 运行时 / cloud-api-adaptor 编排
+│         ▼
+│   【运行位置：机密 VM 内 / Guest TEE】
+│
+├─ 库（被上游消费，不直接运行）
+│   ├─ image-rs      ──► kata-containers agent / 容器运行时（Guest 内）
+│   ├─ ocicrypt-rs   ──► image-rs 依赖（Guest 内）
+│   ├─ protos        ──► AA/CDH 的 ttrpc/gRPC 接口生成代码
+│   └─ kbs_protocol / attester / kms / resource_uri / crypto ──► AA/CDH 内部支撑库
+│
+└─ 外部 counterpart（非本仓库产物，但紧密配合）
+    └─ Trustee / KBS ──► 【运行位置：TEE 之外（Host 侧或远程服务）】
+```
+
+### 16.2 产物 → 消费方 → 运行位置 对照表
+
+| 产物 | 类型 | 消费方（谁用它） | 运行位置 |
+|---|---|---|---|
+| `confidential-data-hub`（CDH） | 二进制守护进程 | kata 运行时 / cloud-api-adaptor 启动 | **机密 VM 内（Guest）** |
+| `attestation-agent`（AA） | 二进制守护进程（ttrpc-aa/grpc-aa） | 同上，先启动 | **机密 VM 内（Guest）** |
+| `api-server-rest`（ASR） | 二进制守护进程（REST→ttrpc） | 本地 loopback 调用 | **机密 VM 内（Guest）** |
+| `image-rs`（lib） | 库 | kata-containers agent / 容器运行时链接 | **机密 VM 内（Guest）** |
+| `ocicrypt-rs`（lib） | 库 | image-rs 依赖 | **机密 VM 内（Guest）** |
+| `protos`（lib） | 生成代码 | AA/CDH 内部 RPC | 随 AA/CDH 编入 Guest |
+| `kbs_protocol` / `attester` / `kms` / `resource_uri` / `crypto`（lib） | 支撑库 | AA/CDH 内部 | 随 AA/CDH 编入 Guest |
+| `trustee-attester` / `coco_keyprovider` / `evidence_getter` / `secret` 等 | 辅助 CLI | 调试 / 注册密钥 / 解封 | 多在 Guest 内或构建期工具 |
+| **Trustee / KBS** | 外部服务（非本仓） | 验证证据、发令牌与密钥；KMS/离线文件为密钥源 | **TEE 之外（Host 或远程）** |
+
+### 16.3 运行时布局图（Guest 边界）
+
+```
+┌──────────────────── 机密 VM 边界 / Guest TEE ────────────────────┐
+│                                                                 │
+│  containerd / kata agent ──(链接)──► image-rs + ocicrypt-rs       │
+│        │  ttrpc / gRPC                                          │
+│        ▼                                                        │
+│   ┌────────┐   ┌────────┐   ┌────────────┐                      │
+│   │  AA    │   │  CDH   │   │   ASR      │  (REST, 仅 loopback) │
+│   │证明代理│   │数据中枢│   │  网关      │                      │
+│   └───┬────┘   └───┬────┘   └────────────┘                      │
+│       │            │ 经 kbs_protocol 向外证明 / 取密钥           │
+└───────┼────────────┼────────────────────────────────────────────┘
+        │ HTTPS · RCAR(Background-Check) / Passport（出 TEE 的请求）
+        ▼
+┌──────────────── TEE 之外（Host 侧 / 远程） ──────────────────────┐
+│  Trustee / KBS：验证硬件证据、签发证明令牌、下发机密密钥         │
+│  密钥源：KMS（阿里云/AWS）、offline_fs_kbc 文件、Sealed Secret   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### 16.4 要点
+
+- **三大守护进程**（CDH/AA/ASR）与 **image-rs/ocicrypt-rs 库** 都跑在**机密 VM（Guest TEE）里**，是 TCB 的一部分。
+- **Trustee/KBS 跑在 TEE 之外**（Host 侧或独立远程服务），本仓库不产出它，但二者通过 `kbs_protocol` 配合完成「证明→取密钥」。
+- 二进制默认 **musl 静态链接**（`Makefile: LIBC ?= musl`），便于塞进精简 guest 镜像；`make build TEE_PLATFORM=...` 按 TEE 平台裁剪 attester。
+- 本仓库**不单独发布安装包**，而是作为组件源被 kata-containers / cloud-api-adaptor 编排进 guest。
