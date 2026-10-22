@@ -449,3 +449,46 @@
 - **Trustee/KBS 跑在 TEE 之外**（Host 侧或独立远程服务），本仓库不产出它，但二者通过 `kbs_protocol` 配合完成「证明→取密钥」。
 - 二进制默认 **musl 静态链接**（`Makefile: LIBC ?= musl`），便于塞进精简 guest 镜像；`make build TEE_PLATFORM=...` 按 TEE 平台裁剪 attester。
 - 本仓库**不单独发布安装包**，而是作为组件源被 kata-containers / cloud-api-adaptor 编排进 guest。
+
+---
+
+## 十七、ASR REST API：接口与使用者
+
+ASR（`api-server-rest`）本质是 **REST→ttrpc 反向代理**，把对 AA（证明）和 CDH（密钥/资源）的访问从 ttrpc 包装成标准 **HTTP**，供不会 ttrpc 的普通工作负载使用。定义见 `api-server-rest/openapi/api.json`（OpenAPI 3.1，监听 `http://127.0.0.1:8006`，仅 loopback）。
+
+### 17.1 接口清单（6 个）
+
+AA 组（转发给 attestation-agent）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/aa/token?token_type=` | 获取证明令牌（`tee_keypair` + JWT `token`） |
+| GET | `/aa/evidence?runtime_data=&encoding=` | 获取 TEE 证据 |
+| GET | `/aa/additional-evidence?runtime_data=&encoding=` | 获取附加证据（如 `sev-snp`） |
+| POST | `/aa/aael` | 写入 AA 事件日志（AAEL），body = `AaelEvent{domain,operation,content}` |
+
+CDH 组（转发给 confidential-data-hub）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/cdh/resource/{repository}/{type}/{tag}` | 按资源路径取回机密资源 |
+
+通用：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/info` | 版本/能力信息（`VersionInfo`：`version`/`tee`/`additional_tees`/`feature`） |
+
+> 统一错误码：`403`（禁止外部/非 loopback 访问）、`404`、`405`（方法不允许）；AA 组另带 `400`（参数错误）。`/aa/aael` 的 `domain` 若用保留命名空间 `github.com/confidential-containers` 会被 403 拒绝（防工作负载伪造组件事件）。
+
+### 17.2 谁在用（使用者）
+
+- **机密工作负载本身（应用容器 / sidecar / init 容器）—— 核心用户**：运行时经 `/cdh/resource` 拉密钥/密封卷/KMS 资源；经 `/aa/token`、`/aa/evidence`、`/aa/additional-evidence` 生成证明物，向外部依赖方（KBS/依赖服务）证明自己跑在真实 TEE 上；经 `/aa/aael` 写运行期事件扩展硬件测量（measured boot / 远程证明完整性）；`/info` 探活与能力发现。
+- **kata-containers agent（guest 内虚机代理）**：编排容器时也会用（取资源、做测量），但它更常直接走 ttrpc 与 AA/CDH 通信，REST 是 HTTP 备选项。
+
+### 17.3 谁**不**用
+
+- **外部验证方 / 依赖方**：跟 **KBS / Trustee** 交互（RCAR/Passport），不经过这个 loopback REST。
+- **Host 侧 cloud-api-adaptor**：负责拉起机密 VM、注入配置，但不打 guest 内 loopback REST。
+
+> 设计意图：ASR 让「只会 HTTP 的普通应用」也能消费 TCB 能力；真正「对外证明」的链路是 **AA → KBS/Trustee**（经 `kbs_protocol`），与此 REST 面无关。
