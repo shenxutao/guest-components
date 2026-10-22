@@ -100,7 +100,7 @@ scp /tmp/gc-dev.bundle ubuntu@<服务器IP>:~/
 git clone ~/gc-dev.bundle guest-components
 cd guest-components
 git checkout 2026-10-21-dev
-git log --oneline -3          # 应看到 b933e96d 等提交
+git log --oneline -3          # 确认分支与本地提交已还原（含 Makefile 补 csv→csv-attester 那条）
 ```
 
 **0.3 确认工具链版本**
@@ -114,7 +114,7 @@ cargo --version && rustc --version && protoc --version
 - `build-essential`：提供 `gcc`/`make` 等原生编译工具。
 - `pkg-config` + `libssl-dev`：OpenSSL 是本仓库加密后端的**固定依赖**（非可选项），编译期需要其头文件与链接库。
 - `protobuf-compiler`：`protos` 仓库用它生成 ttrpc / gRPC 的 Rust 绑定代码。
-- `clang`：部分 TEE 绑定（如 `iocuddle`/ioctl 包装、`csv-rs`/`codicon` 的 bindgen）在构建时需要。
+- `clang`：部分 TEE 绑定在构建时需要（如 bindgen 生成的 C FFI 包装 / ioctl 包装）。
 - 若改用能联网时推送再 clone：`git push origin 2026-10-21-dev` 后 `git clone -b 2026-10-21-dev <你的fork>`。
 - 服务器是普通 VM、非海光 CSV 机密机：`TEE_PLATFORM=csv` 能**编译**但运行拿不到 `/dev/csv-guest` 出不了真证据；真 CSV 验明需海光硬件（见步骤 8）。
 
@@ -144,14 +144,14 @@ cargo build -p confidential-data-hub -p attestation-agent -p api-server-rest
 - `cargo build` 默认用本机原生目标（x86_64-unknown-linux-gnu），**不需要 musl 交叉工具链**。musl 静态链接仅用于最终打包进 guest 镜像，开发期可跳过。
 - 二进制命名有两条口径，二选一即可：
   - **cargo 口径**：AA 的 bin 名是 `ttrpc-aa` / `grpc-aa`（见 `attestation-agent/attestation-agent/Cargo.toml:9-19`）；CDH、ASR 的包名即 bin 名（`confidential-data-hub`、`api-server-rest`）。
-  - **Makefile 口径**：顶层 `Makefile:52-54` 规定产物名就是 `confidential-data-hub` / `attestation-agent` / `api-server-rest`（见步骤 5 用 `make build` 时）。
+  - **Makefile 口径**：顶层 `Makefile:53-55` 规定产物名就是 `confidential-data-hub` / `attestation-agent` / `api-server-rest`（见步骤 5 用 `make build` 时）。
 - 若想贴近 CI / 产出与最终镜像一致的静态二进制：
   ```bash
   # 方式 B：TEE_PLATFORM=all 编入全部 attester（含 csv-attester，Cargo.toml:79），
   #         避免 none 特性歧义；开发期用 LIBC=gnu 免去 musl 工具链
   make build TEE_PLATFORM=all LIBC=gnu
   ```
-  > 注意：`Makefile` 已补 `csv → csv-attester` 映射（D2-M1 已完成，见 `Makefile:34-37`），现在可直接 `TEE_PLATFORM=csv` 构建 CSV attester。
+  > 注意：`Makefile` 已补 `csv → csv-attester` 映射（D2-M1 已完成，见 `Makefile:36-37`），现在可直接 `TEE_PLATFORM=csv` 构建 CSV attester。
 
 <a id="step3"></a>
 ## 步骤 3：准备 offline_fs_kbc 资源文件（替代外部 KBS）

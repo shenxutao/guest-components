@@ -8,7 +8,7 @@ project and consumed by kata-containers or cloud-api-adaptor.
 
 ## Build
 
-This is a Rust workspace (resolver v2) pinned to toolchain **1.90.0** (see `rust-toolchain.toml`).
+This is a Rust workspace (resolver v2) pinned to toolchain **1.95.0** (see `rust-toolchain.toml`).
 
 ```bash
 # Build all workspace members (default features)
