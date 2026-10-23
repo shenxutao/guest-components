@@ -40,11 +40,9 @@
 
 > **作用**：准备一台能编译、能跑的服务器环境（系统 / 镜像 / 代码 / 工具链），是后面所有步骤的前提。
 
-> ⚠️ **实操顺序（与下方编号顺序不同，照这个跑）**：
-> **A1（配镜像）→ A4（先把代码上服务器）→ A2（setup，脚本在仓库里）→ A3（低内存机加 swap）→ A5（工具链确认）**。
-> 原因：A2 的 `scripts/setup-server.sh` 位于仓库内，必须先有代码；按文档编号顺序 A1→A2 会因为脚本不存在而失败。
-> 补充：A4 的 `git clone` 依赖 git，而 git 由 A2 的脚本安装——全新最小镜像若没预装 git，A4 会报 `git: command not found`。
-> 开跑前先 `which git` 确认；没有就先执行 `sudo apt update && sudo apt install -y git`（重装后的干净机器常见）。
+> ✅ **下方 A1 → A5 的编号就是执行顺序，从上往下照着跑即可，不用跳着做。**
+> 唯一要注意的依赖：A2 的 `git clone` 需要 git，而 git 由 A3 的脚本安装——所以全新机器在做 A2 之前先 `which git`；
+> 没有就 `sudo apt update && sudo apt install -y git`（重装后的干净机器常见）。
 
 **A1. 系统与镜像**：Ubuntu 24.04 LTS **x86_64**（不要 CentOS / Rocky）。国内服务器**先配镜像**，否则下一步装 rustup 会卡在下载 0 字节：
 
@@ -64,30 +62,9 @@ printf '[source.crates-io]\nreplace-with = "rsproxy-sparse"\n\n[source.rsproxy-s
 printf '[url "https://ghfast.top/https://github.com/"]\n\tinsteadOf = https://github.com/\n[http]\n\tversion = HTTP/1.1\n' > ~/.gitconfig
 ```
 
-**A2. 装编译依赖 + Rust 工具链**：
+**A2. 代码上服务器（Mac 执行；当前分支有未推提交，用 bundle）**：
 
-```bash
-# 目录：仓库根 ~/guest-components（本步需 A4 代码已上服务器后执行）
-cd ~/guest-components
-# scripts/setup-server.sh：一键安装编译依赖（build-essential/pkg-config/libssl-dev/protobuf-compiler/clang/cmake/musl-tools）
-#   并安装 rustup 工具链（锁 1.95.0）+ x86_64-unknown-linux-musl 目标，最后打印 cargo/rustc/protoc 版本
-bash scripts/setup-server.sh
-```
-
-脚本做的事（`scripts/setup-server.sh`）：
-- apt 安装：`build-essential pkg-config libssl-dev protobuf-compiler clang libclang-dev cmake git curl ca-certificates musl-tools`
-- 安装 rustup（`rust-toolchain.toml` 自动锁 1.95.0）+ 添加 `x86_64-unknown-linux-musl` 目标
-- 期望输出末尾：`cargo --version` / `rustc --version` / `protoc --version` 正常打印
-
-**A3. （低内存机，≤2G）加 swap 防编译 OOM**：
-
-```bash
-# 目录：服务器（任意目录即可）
-# 低内存机（≤2G）加 2G swap 防编译 OOM：建文件→改权限→格式化 swap→启用→看内存
-sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && free -h
-```
-
-**A4. 代码上服务器（本地 Mac 执行；当前分支有未推提交，用 bundle）**：
+> 说明：本步**必须排在 A3 之前**——A3 的 `scripts/setup-server.sh` 就在仓库里，代码没上来就跑不了（这是最容易踩的顺序坑）。
 
 ```bash
 # Mac 本地
@@ -99,12 +76,37 @@ git bundle create /tmp/gc-dev.bundle 2026-10-21-dev && ls -lh /tmp/gc-dev.bundle
 scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
 
 # 服务器
+# 前置：全新机器可能没装 git（git 由 A3 的脚本安装，但本步在 A3 之前，所以这里先自己装）
+which git || (sudo apt update && sudo apt install -y git)
 # 从 bundle 还原成仓库并切到开发分支
 git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkout 2026-10-21-dev
 git log --oneline -3          # 确认分支与本地提交已还原（含 Makefile 的 csv→csv-attester 映射）
 ```
 
 期望：`git log` 显示你本地最新提交（含 `Makefile` 的 `csv→csv-attester` 映射）。
+
+**A3. 装编译依赖 + Rust 工具链（必须在 A2 之后）**：
+
+```bash
+# 目录：仓库根 ~/guest-components（本步依赖 A2：代码已经在服务器上了）
+cd ~/guest-components
+# scripts/setup-server.sh：一键安装编译依赖（build-essential/pkg-config/libssl-dev/protobuf-compiler/clang/cmake/musl-tools）
+#   并安装 rustup 工具链（锁 1.95.0）+ x86_64-unknown-linux-musl 目标，最后打印 cargo/rustc/protoc 版本
+bash scripts/setup-server.sh
+```
+
+脚本做的事（`scripts/setup-server.sh`）：
+- apt 安装：`build-essential pkg-config libssl-dev protobuf-compiler clang libclang-dev cmake git curl ca-certificates musl-tools`
+- 安装 rustup（`rust-toolchain.toml` 自动锁 1.95.0）+ 添加 `x86_64-unknown-linux-musl` 目标
+- 期望输出末尾：`cargo --version` / `rustc --version` / `protoc --version` 正常打印
+
+**A4. （低内存机，≤2G）加 swap 防编译 OOM**：
+
+```bash
+# 目录：服务器（任意目录即可）
+# 低内存机（≤2G）加 2G swap 防编译 OOM：建文件→改权限→格式化 swap→启用→看内存
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && free -h
+```
 
 **A5. 确认工具链**：
 
@@ -136,7 +138,7 @@ ls -lh target/debug/ttrpc-cdh target/debug/api-server-rest target/debug/ttrpc-aa
 
 期望：5 个二进制齐全。参考耗时：B1 约 13 分钟，B2 约 50 秒（依赖已缓存）。
 **全新机首次编译**需重新下载全部依赖（无 `~/.cargo` 缓存），B1 可能 20–30 分钟，取决于镜像速度，属正常，别中断。
-常见失败：① 报 ``target `ttrpc-aa` requires the features `bin` `` → B2 漏了 `bin` 特性；② 编译 OOM → 先做 A3；③ 依赖拉取失败/卡住 → 检查 A1 镜像。
+常见失败：① 报 ``target `ttrpc-aa` requires the features `bin` `` → B2 漏了 `bin` 特性；② 编译 OOM → 先做 A4；③ 依赖拉取失败/卡住 → 检查 A1 镜像。
 
 ### 阶段 C：配置（对应步骤 3、4、5.0）
 
@@ -237,7 +239,7 @@ curl -s "http://127.0.0.1:8006/aa/evidence?runtime_data=test"   # 期望：{"rep
 # ⚠️ 本速查把「Mac 打包」(步骤2 的 git bundle/scp) 与「服务器编译/运行」(步骤1、3–6) 混在一个块里：
 #   · 步骤 1 的 bash scripts/setup-server.sh 与 步骤 3–6 都在【服务器、目录 ~/guest-components】执行
 #   · 步骤 2 的 git bundle / scp 在【Mac 本地】执行（先 cd 到仓库根）
-# 1) 装环境（服务器，目录 ~/guest-components；国内服务器必须先配镜像，见步骤 0.1）
+# 1) 装环境（服务器，目录 ~/guest-components；国内服务器必须先配镜像，见步骤 0.2）
 cd ~/guest-components
 bash scripts/setup-server.sh
 
@@ -301,17 +303,29 @@ curl -s http://127.0.0.1:8006/cdh/resource/default/key/1    # 期望：my-dev-se
 - 架构：**x86_64**（项目 TEE attester 均为 x86 平台，CSV 是海光 x86）；**避开 ARM / 鲲鹏**
 - 镜像类型：基于操作系统镜像（干净系统）
 
-**0.1 服务器初始化（一键脚本）**
-```bash
-# 目录：仓库根 ~/guest-components（服务器；需代码已上服务器，见 0.2）
-cd ~/guest-components
-# 在腾讯云 Ubuntu x86_64 上执行（装 rustup 1.95.0 + 编译依赖 + musl 目标）
-bash scripts/setup-server.sh
-```
-脚本见 `scripts/setup-server.sh`：装 `build-essential`/`pkg-config`/`libssl-dev`/`protobuf-compiler`/`clang`/`libclang-dev`/`cmake`/`musl-tools`，装 rustup 并加 `x86_64-unknown-linux-musl` 目标。
-> 轻量服务器内存小（常见 2G）时建议加 2G swap 防编译 OOM：`sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`
+**0.1 把「当前分支」代码带到服务器（本地 Mac 执行；必须排在 0.2 之前）**
 
-> **国内服务器必做（腾讯云等；2026-10-22 已在 2 服务器实测）**：`static.rust-lang.org` 与 `github.com` 在国内基本不可达——脚本会在「装 rustup」步卡死（下载 0 字节），后续 cargo 拉 git 依赖也会失败。先配好镜像再跑脚本（或脚本卡住后补配再重跑）：
+> 本步**必须先做**：0.2 的 `scripts/setup-server.sh` 就在仓库里，代码没上来会报 `No such file or directory`（这是最容易踩的顺序坑）。
+
+当前分支 `2026-10-21-dev` 有未推提交，不能用远端 clone；用 `git bundle`：
+```bash
+# Mac 上：打包分支（含全部本地提交）
+cd "$HOME/MyWorkspace/Docs/机密计算/开发/guest-components"
+git bundle create /tmp/gc-dev.bundle 2026-10-21-dev
+scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
+```
+```bash
+# 服务器上：从 bundle 还原（全新机先确认 git：git 由 0.2 的脚本安装，但本步在它之前）
+which git || (sudo apt update && sudo apt install -y git)
+git clone ~/gc-dev.bundle guest-components
+cd guest-components
+git checkout 2026-10-21-dev
+git log --oneline -3          # 确认分支与本地提交已还原（含 Makefile 补 csv→csv-attester 那条）
+```
+
+**0.2 服务器初始化（一键脚本；必须在 0.1 之后）**
+
+> **国内服务器必做——先配镜像，再跑脚本**（腾讯云等；2026-10-22 已在 2 服务器实测）：`static.rust-lang.org` 与 `github.com` 在国内基本不可达——脚本会在「装 rustup」步卡死（下载 0 字节），后续 cargo 拉 git 依赖也会失败。**先配好下面这套镜像，再执行脚本**（或脚本卡住后补配再重跑）：
 > ```bash
 > # ① rustup 工具链走腾讯云镜像（TUNA 同步滞后、可能缺 1.95.0，勿用；官方源被墙）
 > export RUSTUP_DIST_SERVER=https://mirrors.cloud.tencent.com/rustup
@@ -324,21 +338,15 @@ bash scripts/setup-server.sh
 > ```
 > 原因：本仓库有多个 GitHub git 依赖（`occlum/occlum`、`intel/…tee.dcap`、`NVIDIA/attestation-sdk`、`mdaffin/loopdev`），occlum 还带子模块（teaclave-sgx-sdk 等），**cargo 解析阶段就要拉全**，不配代理直接失败。rustup-init 可从镜像下载：`https://mirrors.cloud.tencent.com/rustup/rustup/dist/x86_64-unknown-linux-gnu/rustup-init`。
 
-**0.2 把「当前分支」代码带到服务器（本地 Mac 执行）**
-当前分支 `2026-10-21-dev` 有未推提交，不能用远端 clone；用 `git bundle`：
+配好镜像后，再跑初始化脚本：
 ```bash
-# Mac 上：打包分支（含全部本地提交）
-cd "$HOME/MyWorkspace/Docs/机密计算/开发/guest-components"
-git bundle create /tmp/gc-dev.bundle 2026-10-21-dev
-scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
+# 目录：仓库根 ~/guest-components（服务器；依赖 0.1：代码已上服务器）
+cd ~/guest-components
+# 在腾讯云 Ubuntu x86_64 上执行（装 rustup 1.95.0 + 编译依赖 + musl 目标）
+bash scripts/setup-server.sh
 ```
-```bash
-# 服务器上：从 bundle 还原
-git clone ~/gc-dev.bundle guest-components
-cd guest-components
-git checkout 2026-10-21-dev
-git log --oneline -3          # 确认分支与本地提交已还原（含 Makefile 补 csv→csv-attester 那条）
-```
+脚本见 `scripts/setup-server.sh`：装 `build-essential`/`pkg-config`/`libssl-dev`/`protobuf-compiler`/`clang`/`libclang-dev`/`cmake`/`musl-tools`，装 rustup 并加 `x86_64-unknown-linux-musl` 目标。
+> 轻量服务器内存小（常见 2G）时建议加 2G swap 防编译 OOM：`sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`
 
 **0.3 确认工具链版本**
 ```bash
@@ -361,7 +369,7 @@ cargo --version && rustc --version && protoc --version
 <a id="step1"></a>
 ## 步骤 1：进入仓库并切到开发分支
 
-> 📖 **本节对应主流程「阶段 A」的 A4**（代码上服务器 + 切分支）——照主流程跑无需重复执行。
+> 📖 **本节对应主流程「阶段 A」的 A2**（代码上服务器 + 切分支）——照主流程跑无需重复执行。
 
 ```bash
 # 目录：服务器、仓库根 ~/guest-components 的父目录（已 clone 后）
@@ -384,7 +392,7 @@ git status -sb                              # 确认领先/落后状态
 ```bash
 cd ~/guest-components
 cargo --version && rustc --version && protoc --version   # 期望 1.95.0 / 1.95.0 / 3.21.12
-free -h                                                  # 内存 < 2G 建议先加 swap（见步骤 0.1）
+free -h                                                  # 内存 < 2G 建议先加 swap（见步骤 0.2）
 df -h ~                                                  # 至少留 10G（target/ 较大）
 ```
 
@@ -421,8 +429,8 @@ file target/debug/ttrpc-cdh    # 期望：ELF 64-bit LSB executable, x86-64
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | ``target `ttrpc-aa` requires the features `bin` `` | AA 漏了 `bin` 特性 | 用 2.2 的完整特性集 |
-| 进程被 `killed` / OOM | 内存不足 | 加 swap（步骤 0.1 A3） |
-| 依赖拉取卡住 / `transfer closed` | 国内网络 | 配步骤 0.1 的三方镜像 |
+| 进程被 `killed` / OOM | 内存不足 | 加 swap（步骤 0.2 / 主流程 A4） |
+| 依赖拉取卡住 / `transfer closed` | 国内网络 | 配步骤 0.2 的三方镜像 |
 | `tss2.pc not found` | 编入了 tpm-attester | 测试 VM 用最小特性集；真机再 `sudo apt install libtss2-dev` |
 | `Blocking waiting for file lock` | 上次 cargo 进程残留 | `pkill -f 'bi[n]/cargo'` 后重试 |
 

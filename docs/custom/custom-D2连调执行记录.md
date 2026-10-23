@@ -15,7 +15,7 @@
 
 ## 1. 执行记录（命令 → 结果）
 
-### 步骤 0.2 代码上服务器
+### 步骤 0.1 代码上服务器
 ```bash
 # Mac 本地
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev     # 5.5M
@@ -25,7 +25,7 @@ git clone ~/gc-dev.bundle guest-components && git checkout 2026-10-21-dev
 ```
 → 成功，HEAD = `8d68afe8`。
 
-### 步骤 0.1 环境初始化
+### 步骤 0.2 环境初始化
 ```bash
 # 目录：仓库根 ~/guest-components（服务器；环境初始化前需代码已上服务器）
 cd ~/guest-components
@@ -97,7 +97,7 @@ nohup ./target/debug/api-server-rest --features all &
 | 6 | `--type vault` / `--output_dir` / `--file_path` / `--aa_kbc_params` | 实际是 `seal … vault` 子命令 + kebab-case 参数；且 **keygen 前要 mkdir 输出目录** |
 | 7 | `seal … \| tee file` 后直接 unseal | vault 的 seal 会往 stdout 打一行 Warning，须 `tail -n +2` 滤掉 |
 | 8 | `token_type=default` | 合法值只有 `kbs` / `coco_as` |
-| 9 | setup 脚本即完备 | 国内服务器需先配 rustup/cargo/git 三方镜像（见 runbook 步骤 0.1） |
+| 9 | setup 脚本即完备 | 国内服务器需先配 rustup/cargo/git 三方镜像（见 runbook 步骤 0.2） |
 
 ## 4. 当前服务器状态与复测方法
 
@@ -230,12 +230,28 @@ Get Resource failed: Kbs client error: get resource failed: GetTokenFailed(
 
 > 汇总 2026-10-22（步骤 0–6）与 2026-10-23（回归 + 步骤 7）**实际执行过**的命令，按阶段归类；与 runbook 的「完整部署与测试流程」一一对应。
 
-### 8.1 环境准备（步骤 0.1）
+### 8.1 代码上服务器（步骤 0.1，Mac 执行）
+
+> **作用**：把本地开发分支（含未推送提交）打包成单文件带上服务器，还原成可编译的仓库（当前分支有未推提交，不能用远端 clone）。
+> **必须排在 8.2 之前**：8.2 的 `bash scripts/setup-server.sh` 就在仓库里，代码没上来会报 `No such file or directory`（这是最容易踩的顺序坑）。
+
+```bash
+# Mac 本地
+cd "$HOME/MyWorkspace/Docs/机密计算/开发/guest-components"
+git bundle create /tmp/gc-dev.bundle 2026-10-21-dev      # 实测 5.5M
+scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
+
+# 服务器（全新机先确认 git：git 由 8.2 的脚本安装，但本步在它之前）
+which git || (sudo apt update && sudo apt install -y git)
+git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkout 2026-10-21-dev
+```
+
+### 8.2 环境准备（步骤 0.2；必须在 8.1 之后）
 
 > **作用**：配置国内镜像源、安装编译依赖与 Rust 工具链，让服务器能联网拉取依赖并顺利编译（省得后面卡死）。
 
 ```bash
-# 目录：服务器；环境变量导出任意目录即可，但 bash scripts/setup-server.sh 需在仓库根执行
+# 目录：服务器；环境变量导出任意目录即可，但 bash scripts/setup-server.sh 需在仓库根执行（依赖 8.1）
 # 国内镜像（先配，否则 rustup 卡死）
 export RUSTUP_DIST_SERVER=https://mirrors.cloud.tencent.com/rustup
 export RUSTUP_UPDATE_ROOT=https://mirrors.cloud.tencent.com/rustup/rustup
@@ -246,18 +262,6 @@ printf '[url "https://ghfast.top/https://github.com/"]\n\tinsteadOf = https://gi
 cd ~/guest-components          # setup-server.sh 在仓库根
 bash scripts/setup-server.sh
 cargo --version && rustc --version && protoc --version
-```
-
-### 8.2 代码上服务器（步骤 0.2，Mac 执行）
-
-> **作用**：把本地开发分支（含未推送提交）打包成单文件带上服务器，还原成可编译的仓库（当前分支有未推提交，不能用远端 clone）。
-
-```bash
-cd "$HOME/MyWorkspace/Docs/机密计算/开发/guest-components"
-git bundle create /tmp/gc-dev.bundle 2026-10-21-dev      # 实测 5.5M
-scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
-# 服务器
-git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkout 2026-10-21-dev
 ```
 
 ### 8.3 编译（步骤 2）
