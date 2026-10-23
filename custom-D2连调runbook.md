@@ -3,6 +3,7 @@
 > **目标**：在 Linux x86_64（Ubuntu）上把 D2 涉及的 guest 组件跑起来，完成「自己的服务部署 + 依赖桩」的连调，验证集成管道。**本 runbook 双用途**：① 腾讯云普通 VM（开发/测试，无 TEE）② 真海光 CSV 机密服务器（生产/验明）；两者复用同一套步骤，差异只在少数几处（见步骤 8 迁移映射）。
 > **能力边界（测试 VM）**：无 TEE → 无真硬件证据；用 `all`/`none` attester 桩；用 `offline_fs_kbc` 替代外部 KBS（**无需 Beeceptor**）。真 CSV 证明在真机环境用 `csv` attester + 真 Trustee/KBS 达成（见步骤 8）。
 > **约定**：命令在 Ubuntu x86_64 上执行；`$` 后为一行命令；凡标注「（确认）」处，以你机器上 `cargo build` 实际产物为准。
+> **实测状态（2026-10-22）**：步骤 0–6 已在腾讯云 2 服务器（Ubuntu 24.04.4，无 TEE）完整跑通，6.1–6.4 验证全过；每步命令与结果、问题与解法见 `custom-D2连调执行记录.md`。步骤 7（mock KBS）为可选项，未执行。
 
 ## 目录
 
@@ -30,22 +31,31 @@
 最小可跑通路径（测试 VM；命令在 Ubuntu x86_64 上执行）：
 
 ```bash
-# 1) 装环境（一次）
+# 1) 装环境（一次）——国内服务器必须先配镜像（见步骤 0.1），否则脚本在「装 rustup」步卡死
 bash scripts/setup-server.sh
 
 # 2) 取代码（Mac 上打包，服务器上还原）
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev && scp /tmp/gc-dev.bundle ubuntu@<IP>:~/
 #   服务器上：git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkout 2026-10-21-dev
 
-# 3) 构建
-cargo build -p confidential-data-hub -p attestation-agent -p api-server-rest
+# 3) 构建（AA 必须带 bin 特性才产出 ttrpc-aa；首编全树约 10–15 分钟）
+cargo build -p confidential-data-hub -p api-server-rest
+cargo build -p attestation-agent --no-default-features --features "kbs,coco_as,bin,ttrpc"
 
-# 4) 准备 KBC 资源并启动（生成 dev-resources.json 见步骤 3；起服务见步骤 5）
+# 4) 准备 KBC 资源（生成 dev-resources.json 见步骤 3）+ 运行时目录
 export AA_KBC_PARAMS="offline_fs_kbc::null"
 export OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json"
+sudo mkdir -p /run/confidential-containers && sudo chown -R "$(id -un):$(id -gn)" /run/confidential-containers
 
-# 5) 验证
-curl -s http://127.0.0.1:8006/info | head
+# 5) 启动（后台方式；完整说明与坑见步骤 5）
+AA_KBC_PARAMS="offline_fs_kbc::null" OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json" \
+  nohup ./target/debug/ttrpc-cdh > ~/cdh.log 2>&1 &
+AA_KBC_PARAMS="offline_fs_kbc::null" nohup ./target/debug/ttrpc-aa > ~/aa.log 2>&1 &
+nohup ./target/debug/api-server-rest --features all > ~/asr.log 2>&1 &
+
+# 6) 验证
+curl -s http://127.0.0.1:8006/info
+curl -s http://127.0.0.1:8006/cdh/resource/default/key/1    # 期望：my-dev-secret-key-001
 ```
 
 > 真海光 CSV 部署：把上表的 attester 换成 `csv`、KBC 指向真 KBS 即可。完整真机步骤见 `custom-真机CSV部署.md` 与下方步骤 8 迁移映射。
@@ -98,7 +108,7 @@ bash scripts/setup-server.sh
 > # ③ GitHub git 依赖走 ghfast.top 代理，并强制 HTTP/1.1（ghproxy.net 会截断大文件，勿用）
 > printf '[url "https://ghfast.top/https://github.com/"]\n\tinsteadOf = https://github.com/\n[http]\n\tversion = HTTP/1.1\n' > ~/.gitconfig
 > ```
-> 原因：本仓库有多个 GitHub git 依赖（`occlum/occlum`、`intel/…tee.dcap`、`NVIDIA/attestation-sdk`、`mdaffin/loopdev`），occlum 还带子模块（teaclave-sgx-sdk 等），**cargo 解析阶段就要拉全**，不配代理直接失败。 rustup-init 可从镜像下载：`https://mirrors.cloud.tencent.com/rustup/rustup/dist/x86_64-unknown-linux-gnu/rustup-init`。
+> 原因：本仓库有多个 GitHub git 依赖（`occlum/occlum`、`intel/…tee.dcap`、`NVIDIA/attestation-sdk`、`mdaffin/loopdev`），occlum 还带子模块（teaclave-sgx-sdk 等），**cargo 解析阶段就要拉全**，不配代理直接失败。rustup-init 可从镜像下载：`https://mirrors.cloud.tencent.com/rustup/rustup/dist/x86_64-unknown-linux-gnu/rustup-init`。
 
 **0.2 把「当前分支」代码带到服务器（本地 Mac 执行）**
 当前分支 `2026-10-21-dev` 有未推提交，不能用远端 clone；用 `git bundle`：
@@ -159,6 +169,7 @@ cargo build -p attestation-agent --no-default-features --features "kbs,coco_as,b
 
 **说明**
 - `cargo build` 默认用本机原生目标（x86_64-unknown-linux-gnu），**不需要 musl 交叉工具链**。musl 静态链接仅用于最终打包进 guest 镜像，开发期可跳过。
+- 首次全树编译耗时参考（2 服务器实测，3.6G 内存 + swap）：方式 A 第一条约 13 分钟；AA 补充构建（依赖已缓存）约 1 分钟。低内存机器建议先加 swap（见步骤 0.1）。
 - 二进制命名有两条口径，二选一即可：
   - **cargo 口径**：AA 的 bin 名是 `ttrpc-aa` / `grpc-aa`（见 `attestation-agent/attestation-agent/Cargo.toml:9-19`）；**CDH 的 bin 名是 `ttrpc-cdh`（不是包名 `confidential-data-hub`）**；ASR 的包名即 bin 名（`api-server-rest`）。
   - **Makefile 口径**：顶层 `Makefile:53-55` 规定产物名就是 `confidential-data-hub` / `attestation-agent` / `api-server-rest`（见步骤 5 用 `make build` 时）。
@@ -255,7 +266,7 @@ cargo run -p api-server-rest -- --features all
 ```
 
 **说明**
-- 建议三个组件各开一个终端（或 `nohup ... &` / systemd unit 后台运行），便于看日志。
+- 建议三个组件各开一个终端（或 `nohup ... &` / systemd unit 后台运行），便于看日志。实测后台做法（日志在 `~/cdh.log`、`~/aa.log`、`~/asr.log`）：`AA_KBC_PARAMS="offline_fs_kbc::null" OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json" nohup ./target/debug/ttrpc-cdh > ~/cdh.log 2>&1 &`（AA/ASR 同理，ASR 记得带 `--features all`）。
 - 用 `make build` 产出的二进制时，把 `cargo run -p X --bin Y` 换成直接执行 `./target/x86_64-unknown-linux-gnu/release/<bin>` 并前置同样的环境变量。
 
 ---
