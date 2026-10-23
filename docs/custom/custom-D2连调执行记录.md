@@ -27,6 +27,8 @@ git clone ~/gc-dev.bundle guest-components && git checkout 2026-10-21-dev
 
 ### 步骤 0.1 环境初始化
 ```bash
+# 目录：仓库根 ~/guest-components（服务器；环境初始化前需代码已上服务器）
+cd ~/guest-components
 bash scripts/setup-server.sh
 ```
 → apt 依赖（build-essential/pkg-config/libssl-dev/protobuf-compiler/clang/libclang-dev/cmake/musl-tools）全部安装成功；**rustup 步骤卡死**（官方源不可达，见问题 1），改用腾讯云镜像后：
@@ -38,6 +40,8 @@ export RUSTUP_UPDATE_ROOT=https://mirrors.cloud.tencent.com/rustup/rustup
 
 ### 步骤 2 构建
 ```bash
+# 目录：~/guest-components（服务器）
+cd ~/guest-components
 cargo build -p confidential-data-hub -p api-server-rest          # 13m07s，Finished dev profile
 cargo build -p attestation-agent --no-default-features --features "kbs,coco_as,bin,ttrpc"   # 49.63s
 ```
@@ -154,6 +158,8 @@ printf '[url "https://ghfast.top/https://github.com/"]\n\tinsteadOf = https://gi
 
 一次 SSH 内执行的命令：
 ```bash
+# 目录：~/guest-components（服务器，一次 SSH 内顺序执行）
+cd ~/guest-components
 curl -s http://127.0.0.1:8006/info
 curl -s http://127.0.0.1:8006/cdh/resource/default/key/1
 curl -s http://127.0.0.1:8006/cdh/resource/default/key/2
@@ -227,6 +233,7 @@ Get Resource failed: Kbs client error: get resource failed: GetTokenFailed(
 ### 8.1 环境准备（步骤 0.1）
 
 ```bash
+# 目录：服务器；环境变量导出任意目录即可，但 bash scripts/setup-server.sh 需在仓库根执行
 # 国内镜像（先配，否则 rustup 卡死）
 export RUSTUP_DIST_SERVER=https://mirrors.cloud.tencent.com/rustup
 export RUSTUP_UPDATE_ROOT=https://mirrors.cloud.tencent.com/rustup/rustup
@@ -234,6 +241,7 @@ mkdir -p ~/.cargo
 printf '[source.crates-io]\nreplace-with = "rsproxy-sparse"\n\n[source.rsproxy-sparse]\nregistry = "sparse+https://rsproxy.cn/index/"\n\n[net]\ngit-fetch-with-cli = true\n' > ~/.cargo/config.toml
 printf '[url "https://ghfast.top/https://github.com/"]\n\tinsteadOf = https://github.com/\n[http]\n\tversion = HTTP/1.1\n' > ~/.gitconfig
 
+cd ~/guest-components          # setup-server.sh 在仓库根
 bash scripts/setup-server.sh
 cargo --version && rustc --version && protoc --version
 ```
@@ -251,6 +259,8 @@ git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkou
 ### 8.3 编译（步骤 2）
 
 ```bash
+# 目录：~/guest-components（服务器）
+cd ~/guest-components
 cargo build -p confidential-data-hub -p api-server-rest                                    # 13m07s
 cargo build -p attestation-agent --no-default-features --features "kbs,coco_as,bin,ttrpc"  # 49.63s
 ls -lh target/debug/ttrpc-cdh target/debug/api-server-rest target/debug/ttrpc-aa target/debug/secret target/debug/ttrpc-cdh-tool
@@ -259,6 +269,7 @@ ls -lh target/debug/ttrpc-cdh target/debug/api-server-rest target/debug/ttrpc-aa
 ### 8.4 配置（步骤 3、4、5.0）
 
 ```bash
+# 目录：服务器（任意目录即可；文件路径用绝对路径）
 cat > /tmp/dev-resources.json <<'EOF'
 { "default/key/1": "bXktZGV2LXNlY3JldC1rZXktMDAx", "default/key/2": "YW5vdGhlci1zZWNyZXQ=" }
 EOF
@@ -278,6 +289,8 @@ nohup ./target/debug/api-server-rest --features all > ~/asr.log 2>&1 &
 ### 8.6 验证（步骤 6）
 
 ```bash
+# 目录：~/guest-components（服务器）
+cd ~/guest-components
 curl -s http://127.0.0.1:8006/info
 curl -s http://127.0.0.1:8006/cdh/resource/default/key/1
 curl -s http://127.0.0.1:8006/cdh/resource/default/key/2
@@ -297,6 +310,8 @@ curl -s "http://127.0.0.1:8006/aa/token?token_type=kbs"
 ### 8.7 步骤 7（mock KBS）
 
 ```bash
+# 目录：~/guest-components（服务器）
+cd ~/guest-components
 python3 ~/mock-kbs.py &
 curl -s -X POST http://127.0.0.1:8080/kbs/v0/auth -H "Content-Type: application/json" -d '{}'
 AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080" nohup ./target/debug/ttrpc-aa > ~/aa-cckbc.log 2>&1 &

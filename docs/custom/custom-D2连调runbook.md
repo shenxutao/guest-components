@@ -40,6 +40,7 @@
 **A1. 系统与镜像**：Ubuntu 24.04 LTS **x86_64**（不要 CentOS / Rocky）。国内服务器**先配镜像**，否则下一步装 rustup 会卡在下载 0 字节：
 
 ```bash
+# 目录：服务器（任意目录即可；以下为环境变量导出，无需 cd）
 # rustup 走腾讯云镜像（TUNA 滞后、可能缺 1.95.0，勿用）
 export RUSTUP_DIST_SERVER=https://mirrors.cloud.tencent.com/rustup
 export RUSTUP_UPDATE_ROOT=https://mirrors.cloud.tencent.com/rustup/rustup
@@ -53,6 +54,8 @@ printf '[url "https://ghfast.top/https://github.com/"]\n\tinsteadOf = https://gi
 **A2. 装编译依赖 + Rust 工具链**：
 
 ```bash
+# 目录：仓库根 ~/guest-components（本步需 A4 代码已上服务器后执行）
+cd ~/guest-components
 bash scripts/setup-server.sh
 ```
 
@@ -64,6 +67,7 @@ bash scripts/setup-server.sh
 **A3. （低内存机，≤2G）加 swap 防编译 OOM**：
 
 ```bash
+# 目录：服务器（任意目录即可）
 sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && free -h
 ```
 
@@ -85,6 +89,7 @@ git log --oneline -3
 **A5. 确认工具链**：
 
 ```bash
+# 目录：服务器（任意目录即可；cargo 已在 PATH）
 cargo --version && rustc --version && protoc --version
 ```
 
@@ -142,6 +147,8 @@ ss -tlnp | grep 8006
 ### 阶段 E：验证（对应步骤 6；请求/返回参数见附录 C）
 
 ```bash
+# 目录：~/guest-components（服务器）；本块命令在同一 shell 内顺序执行
+cd ~/guest-components
 # E1 探活
 curl -s http://127.0.0.1:8006/info
 # 期望：{"version":"Guest Components Version: <HEAD>","tee":"sample","feature":"all"}
@@ -185,14 +192,20 @@ curl -s "http://127.0.0.1:8006/aa/evidence?runtime_data=test"   # 期望：{"rep
 最小可跑通路径（测试 VM；命令在 Ubuntu x86_64 上执行）：
 
 ```bash
-# 1) 装环境（一次）——国内服务器必须先配镜像（见步骤 0.1），否则脚本在「装 rustup」步卡死
+# ⚠️ 本速查把「Mac 打包」(步骤2 的 git bundle/scp) 与「服务器编译/运行」(步骤1、3–6) 混在一个块里：
+#   · 步骤 1 的 bash scripts/setup-server.sh 与 步骤 3–6 都在【服务器、目录 ~/guest-components】执行
+#   · 步骤 2 的 git bundle / scp 在【Mac 本地】执行（先 cd 到仓库根）
+# 1) 装环境（服务器，目录 ~/guest-components；国内服务器必须先配镜像，见步骤 0.1）
+cd ~/guest-components
 bash scripts/setup-server.sh
 
-# 2) 取代码（Mac 上打包，服务器上还原）
+# 2) 取代码（Mac 本地执行；先 cd 到仓库根）
+cd "/Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components"
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev && scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
 #   服务器上：git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkout 2026-10-21-dev
 
-# 3) 构建（AA 必须带 bin 特性才产出 ttrpc-aa；首编全树约 10–15 分钟）
+# 3) 构建（回到服务器、目录 ~/guest-components；AA 必须带 bin 特性才产出 ttrpc-aa；首编全树约 10–15 分钟）
+cd ~/guest-components
 cargo build -p confidential-data-hub -p api-server-rest
 cargo build -p attestation-agent --no-default-features --features "kbs,coco_as,bin,ttrpc"
 
@@ -217,6 +230,7 @@ curl -s http://127.0.0.1:8006/cdh/resource/default/key/1    # 期望：my-dev-se
 ## 图例与约定
 
 - 命令默认在 **Ubuntu x86_64** 上执行；行首 `$` 表示一条命令（实际粘贴时去掉 `$`）。
+- 每个命令块开头用 `# 目录：…` 标注**当前工作目录**与**执行机**（如 `# 目录：~/guest-components（服务器）`、`# 目录：仓库根 …（Mac 本地）`）；凡含相对路径（`./target/debug/…`、`cargo …`、`bash scripts/…`）的块都已在其内部 `cd` 到对应目录，可整块直接复制执行。
 - 代码块内 `#` 开头为注释，可忽略；较长的解释放在代码块后的「说明」里。
 - 标注「（确认）」处：以你机器上 `cargo build` 实际产物 / 文件实际内容为准（本文为核实自源码的参考值）。
 - 两个核心环境变量：
@@ -245,6 +259,8 @@ curl -s http://127.0.0.1:8006/cdh/resource/default/key/1    # 期望：my-dev-se
 
 **0.1 服务器初始化（一键脚本）**
 ```bash
+# 目录：仓库根 ~/guest-components（服务器；需代码已上服务器，见 0.2）
+cd ~/guest-components
 # 在腾讯云 Ubuntu x86_64 上执行（装 rustup 1.95.0 + 编译依赖 + musl 目标）
 bash scripts/setup-server.sh
 ```
@@ -282,6 +298,7 @@ git log --oneline -3          # 确认分支与本地提交已还原（含 Makef
 
 **0.3 确认工具链版本**
 ```bash
+# 目录：服务器（任意目录即可；cargo 已在 PATH）
 cargo --version && rustc --version && protoc --version
 # rustc 期望含 1.95.0（仓库 rust-toolchain.toml 自动锁定）
 ```
@@ -301,6 +318,7 @@ cargo --version && rustc --version && protoc --version
 ## 步骤 1：进入仓库并切到开发分支
 
 ```bash
+# 目录：服务器、仓库根 ~/guest-components 的父目录（已 clone 后）
 cd guest-components                         # 进入你 clone 的仓库根
 git checkout 2026-10-21-dev                # 你的个人 dev 分支
 git status -sb                              # 确认领先/落后状态
@@ -325,18 +343,24 @@ df -h ~                                                  # 至少留 10G（targe
 **2.1 构建 CDH + ASR（原生 glibc，开发期免 musl）**：
 
 ```bash
+# 目录：~/guest-components（服务器）
+cd ~/guest-components
 cargo build -p confidential-data-hub -p api-server-rest
 ```
 
 **2.2 构建 AA（必须显式带 `bin` 特性，否则不产出 `ttrpc-aa`）**：
 
 ```bash
+# 目录：~/guest-components（服务器）
+cd ~/guest-components
 cargo build -p attestation-agent --no-default-features --features "kbs,coco_as,bin,ttrpc"
 ```
 
 **2.3 校验产物**：
 
 ```bash
+# 目录：~/guest-components（服务器）
+cd ~/guest-components
 ls -lh target/debug/ttrpc-cdh target/debug/api-server-rest target/debug/ttrpc-aa \
        target/debug/secret target/debug/ttrpc-cdh-tool
 file target/debug/ttrpc-cdh    # 期望：ELF 64-bit LSB executable, x86-64
@@ -421,6 +445,8 @@ export OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json"
 - 启动顺序建议：**CDH → AA → ASR**（ASR 是 REST 网关，依赖后两者）。
 
 ```bash
+# 目录：~/guest-components（服务器；cargo run 需在仓库根）
+cd ~/guest-components
 # 5.0 创建运行时目录（socket / 凭据路径）
 sudo mkdir -p /run/confidential-containers
 # 以非 root 用户运行时必须把属主交给该用户，否则 CDH/AA 启动即
@@ -485,6 +511,8 @@ curl -s http://127.0.0.1:8006/cdh/resource/default/key/1
 ### 6.2 image-rs 直连 CDH（验证 kbs:// → offline_fs_kbc 通路）
 
 ```bash
+# 目录：~/guest-components（服务器）
+cd ~/guest-components
 # 二选一：已编好二进制
 ./target/debug/ttrpc-cdh-tool get-resource --resource-uri "kbs:///default/key/1"
 # 或走 cargo
@@ -515,6 +543,8 @@ cargo run -p confidential-data-hub --bin ttrpc-cdh-tool -- \
 
 **本地端到端（Vault + offline_fs_kbc，走真验签）**：
 ```bash
+# 目录：~/guest-components（服务器；cargo run 需在仓库根）
+cd ~/guest-components
 # 0) keygen 不会自建目录，先建输出目录（漏这步会 panic: Failed to write .../my-key-private.json）
 mkdir -p /tmp/secrets /run/confidential-containers/cdh/sealed-secret
 
@@ -604,6 +634,8 @@ curl -s "http://127.0.0.1:8006/aa/token?token_type=kbs"
 **背景**：仅当你想验证 `cc_kbc::https://<mock>` 这条「AA → 真 KBS 形态」的客户端 HTTP 行为时才需要（替代 Beeceptor）。**只验证请求/响应形状，不做真证明**（无 RCAR challenge/response 握手）。
 
 ```bash
+# 目录：~/guest-components（服务器）
+cd ~/guest-components
 # 7.1 起 mock KBS（监听 127.0.0.1:8080）
 # 注意：仓库里没有 `mock-kbs` 这个 bin（旧写法 `cargo run --bin mock-kbs` 会报错）；
 #      用附录 B 的 Python mock，落盘为 ~/mock-kbs.py；请求全量记入 ~/mock-kbs.log
