@@ -120,7 +120,7 @@ curl -s http://127.0.0.1:8006/cdh/resource/default/key/1      # 期望 my-dev-se
 | E1 `/info` | `{"version":"Guest Components Version: 8d68afe8","tee":"sample","feature":"all"}` | ✅ |
 | E2 `key/1` | `my-dev-secret-key-001` | ✅ |
 | E2 `key/2` | `another-secret` | ✅ |
-| E3 `ttrpc-cdh-tool get-resource kbs:///default/key/1` | `bXktZGV2LXNlY3JldCtZXktMDAx`（= `my-dev-secret-key-001`） | ✅ |
+| E3 `ttrpc-cdh-tool get-resource kbs:///default/key/1` | `bXktZGV2LXNlY3JldC1rZXktMDAx`（= `my-dev-secret-key-001`） | ✅ |
 | E5 `/aa/evidence?runtime_data=test` | `{"report_data":"dGVzdA==","svn":"1"}` | ✅ |
 | E4 sealed secret 全链路 | 解封结果 `my-dev-secret-key-001` | ✅ |
 
@@ -232,6 +232,8 @@ Get Resource failed: Kbs client error: get resource failed: GetTokenFailed(
 
 ### 8.1 环境准备（步骤 0.1）
 
+> **作用**：配置国内镜像源、安装编译依赖与 Rust 工具链，让服务器能联网拉取依赖并顺利编译（省得后面卡死）。
+
 ```bash
 # 目录：服务器；环境变量导出任意目录即可，但 bash scripts/setup-server.sh 需在仓库根执行
 # 国内镜像（先配，否则 rustup 卡死）
@@ -248,6 +250,8 @@ cargo --version && rustc --version && protoc --version
 
 ### 8.2 代码上服务器（步骤 0.2，Mac 执行）
 
+> **作用**：把本地开发分支（含未推送提交）打包成单文件带上服务器，还原成可编译的仓库（当前分支有未推提交，不能用远端 clone）。
+
 ```bash
 cd "/Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components"
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev      # 实测 5.5M
@@ -258,6 +262,8 @@ git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkou
 
 ### 8.3 编译（步骤 2）
 
+> **作用**：把源码编成 5 个可执行二进制（CDH / AA / ASR / secret / ttrpc-cdh-tool），后面启动与验证都靠它们。
+
 ```bash
 # 目录：~/guest-components（服务器）
 cd ~/guest-components
@@ -267,6 +273,8 @@ ls -lh target/debug/ttrpc-cdh target/debug/api-server-rest target/debug/ttrpc-aa
 ```
 
 ### 8.4 配置（步骤 3、4、5.0）
+
+> **作用**：准备 offline_fs_kbc 的离线资源文件，并建好运行时目录（socket / 凭据路径），否则 CDH 启动即权限报错。
 
 ```bash
 # 目录：服务器（任意目录即可；文件路径用绝对路径）
@@ -279,6 +287,8 @@ sudo chown -R ubuntu:ubuntu /run/confidential-containers
 
 ### 8.5 启动（步骤 5，CDH → AA → ASR）
 
+> **作用**：按正确顺序把 CDH / AA / ASR 三个守护进程拉起，它们是机密数据分发与证明的核心服务。
+
 ```bash
 cd ~/guest-components
 AA_KBC_PARAMS="offline_fs_kbc::null" OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json" nohup ./target/debug/ttrpc-cdh > ~/cdh.log 2>&1 &
@@ -287,6 +297,8 @@ nohup ./target/debug/api-server-rest --features all > ~/asr.log 2>&1 &
 ```
 
 ### 8.6 验证（步骤 6）
+
+> **作用**：端到端验证全链路——探活、取资源、sealed secret 信封机制、AA 证据/令牌接口，全部通过即代表部署与连调成功。
 
 ```bash
 # 目录：~/guest-components（服务器）
@@ -308,6 +320,8 @@ curl -s "http://127.0.0.1:8006/aa/token?token_type=kbs"
 ```
 
 ### 8.7 步骤 7（mock KBS）
+
+> **作用**：起一个 mock KBS，再换用 `cc_kbc`（真 HTTP 路径）拉起 AA/CDH，验证离线 kbc 之外的另一条资源获取链路也通。
 
 ```bash
 # 目录：~/guest-components（服务器）

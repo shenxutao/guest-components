@@ -37,17 +37,29 @@
 
 ### 阶段 A：准备服务器（对应步骤 0）
 
+> **作用**：准备一台能编译、能跑的服务器环境（系统 / 镜像 / 代码 / 工具链），是后面所有步骤的前提。
+
+> ⚠️ **实操顺序（与下方编号顺序不同，照这个跑）**：
+> **A1（配镜像）→ A4（先把代码上服务器）→ A2（setup，脚本在仓库里）→ A3（低内存机加 swap）→ A5（工具链确认）**。
+> 原因：A2 的 `scripts/setup-server.sh` 位于仓库内，必须先有代码；按文档编号顺序 A1→A2 会因为脚本不存在而失败。
+> 补充：A4 的 `git clone` 依赖 git，而 git 由 A2 的脚本安装——全新最小镜像若没预装 git，A4 会报 `git: command not found`。
+> 开跑前先 `which git` 确认；没有就先执行 `sudo apt update && sudo apt install -y git`（重装后的干净机器常见）。
+
 **A1. 系统与镜像**：Ubuntu 24.04 LTS **x86_64**（不要 CentOS / Rocky）。国内服务器**先配镜像**，否则下一步装 rustup 会卡在下载 0 字节：
 
 ```bash
 # 目录：服务器（任意目录即可；以下为环境变量导出，无需 cd）
-# rustup 走腾讯云镜像（TUNA 滞后、可能缺 1.95.0，勿用）
+
+# ① 让 rustup 走腾讯云镜像源（DIST_SERVER=工具链下载源；UPDATE_ROOT=自更新源）
+#    国内直连 static.rust-lang.org 会被墙，TUNA 镜像可能缺 1.95.0，故用腾讯云
 export RUSTUP_DIST_SERVER=https://mirrors.cloud.tencent.com/rustup
 export RUSTUP_UPDATE_ROOT=https://mirrors.cloud.tencent.com/rustup/rustup
-# crates.io 走 rsproxy 稀疏索引；cargo 用 git CLI 拉依赖（insteadOf 才会生效）
+
+# ② 让 cargo 从 rsproxy 稀疏索引拉 crates.io 依赖；[net] git-fetch-with-cli=true 让下面的 git 代理生效
 mkdir -p ~/.cargo
 printf '[source.crates-io]\nreplace-with = "rsproxy-sparse"\n\n[source.rsproxy-sparse]\nregistry = "sparse+https://rsproxy.cn/index/"\n\n[net]\ngit-fetch-with-cli = true\n' > ~/.cargo/config.toml
-# GitHub git 依赖走 ghfast.top 代理，并强制 HTTP/1.1（ghproxy.net 会截断大文件，勿用）
+
+# ③ 让 git 把 github.com 依赖改为走 ghfast.top 代理拉取，并强制 HTTP/1.1（ghproxy.net 会截断大文件）
 printf '[url "https://ghfast.top/https://github.com/"]\n\tinsteadOf = https://github.com/\n[http]\n\tversion = HTTP/1.1\n' > ~/.gitconfig
 ```
 
@@ -56,6 +68,8 @@ printf '[url "https://ghfast.top/https://github.com/"]\n\tinsteadOf = https://gi
 ```bash
 # 目录：仓库根 ~/guest-components（本步需 A4 代码已上服务器后执行）
 cd ~/guest-components
+# scripts/setup-server.sh：一键安装编译依赖（build-essential/pkg-config/libssl-dev/protobuf-compiler/clang/cmake/musl-tools）
+#   并安装 rustup 工具链（锁 1.95.0）+ x86_64-unknown-linux-musl 目标，最后打印 cargo/rustc/protoc 版本
 bash scripts/setup-server.sh
 ```
 
@@ -68,20 +82,25 @@ bash scripts/setup-server.sh
 
 ```bash
 # 目录：服务器（任意目录即可）
+# 低内存机（≤2G）加 2G swap 防编译 OOM：建文件→改权限→格式化 swap→启用→看内存
 sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && free -h
 ```
 
 **A4. 代码上服务器（本地 Mac 执行；当前分支有未推提交，用 bundle）**：
 
 ```bash
-# Mac
+# Mac 本地
+# cd 到仓库根
 cd "/Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components"
+# git bundle：把分支 2026-10-21-dev 打包成单个文件（当前分支有未推提交、不能用远端 clone 时，靠它把代码带上去）
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev && ls -lh /tmp/gc-dev.bundle
+# scp 把打包文件传到服务器家目录
 scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
 
 # 服务器
+# 从 bundle 还原成仓库并切到开发分支
 git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkout 2026-10-21-dev
-git log --oneline -3
+git log --oneline -3          # 确认分支与本地提交已还原（含 Makefile 的 csv→csv-attester 映射）
 ```
 
 期望：`git log` 显示你本地最新提交（含 `Makefile` 的 `csv→csv-attester` 映射）。
@@ -90,6 +109,7 @@ git log --oneline -3
 
 ```bash
 # 目录：服务器（任意目录即可；cargo 已在 PATH）
+# 确认工具链版本正确（rust 1.95.0 / protoc 3.21.12），避免后面编译因版本不对踩坑
 cargo --version && rustc --version && protoc --version
 ```
 
@@ -97,48 +117,66 @@ cargo --version && rustc --version && protoc --version
 
 ### 阶段 B：编译（对应步骤 2）
 
+> **作用**：把源码编成 5 个可执行二进制（CDH / AA / ASR / secret / ttrpc-cdh-tool），后面启动与验证都靠它们。
+
 ```bash
+# 目录：~/guest-components（服务器）
 cd ~/guest-components
 
-# B1. CDH + ASR（原生 glibc 目标，开发期无需 musl）
+# B1. 编译 CDH 与 ASR 两个组件（原生 glibc 目标即可，开发期无需静态 musl）
 cargo build -p confidential-data-hub -p api-server-rest
 
-# B2. AA（必须显式带 bin 特性，否则不产出 ttrpc-aa 二进制）
+# B2. 编译 AA：必须显式带 bin 特性，否则不产出 ttrpc-aa 二进制（--no-default-features 清掉默认、再按需开 kbs/coco_as/bin/ttrpc）
 cargo build -p attestation-agent --no-default-features --features "kbs,coco_as,bin,ttrpc"
 
-# B3. 校验产物
+# B3. 列出 5 个产物，确认编译成功、二进制齐全
 ls -lh target/debug/ttrpc-cdh target/debug/api-server-rest target/debug/ttrpc-aa target/debug/secret target/debug/ttrpc-cdh-tool
 ```
 
 期望：5 个二进制齐全。参考耗时：B1 约 13 分钟，B2 约 50 秒（依赖已缓存）。
+**全新机首次编译**需重新下载全部依赖（无 `~/.cargo` 缓存），B1 可能 20–30 分钟，取决于镜像速度，属正常，别中断。
 常见失败：① 报 ``target `ttrpc-aa` requires the features `bin` `` → B2 漏了 `bin` 特性；② 编译 OOM → 先做 A3；③ 依赖拉取失败/卡住 → 检查 A1 镜像。
 
 ### 阶段 C：配置（对应步骤 3、4、5.0）
 
+> **作用**：准备 offline_fs_kbc 的资源文件（步骤 3/4），并建好运行时目录（步骤 5.0，否则 CDH 启动即权限报错）。
+
 ```bash
-# C1. 生成离线资源文件（value 必须是 base64）
+# 目录：服务器（任意目录即可；文件路径用绝对路径）
+
+# C1. 生成离线资源文件：offline_fs_kbc 要从这个 JSON 取资源，value 必须是 base64（即 my-dev-secret-key-001 / another-secret）
 cat > /tmp/dev-resources.json <<'EOF'
 {
   "default/key/1": "bXktZGV2LXNlY3JldC1rZXktMDAx",
   "default/key/2": "YW5vdGhlci1zZWNyZXQ="
 }
 EOF
-cat /tmp/dev-resources.json
+cat /tmp/dev-resources.json          # 打印确认写对了
 
-# C2. 运行时目录（非 root 运行必须 chown，否则 CDH 启动即 Permission denied）
+# C2. 建运行时目录（socket / 凭据路径）：非 root 运行必须 chown 给当前用户，否则 CDH 启动即 Permission denied
 sudo mkdir -p /run/confidential-containers
 sudo chown -R "$(id -un):$(id -gn)" /run/confidential-containers
 ```
 
 ### 阶段 D：启动（对应步骤 5，顺序 CDH → AA → ASR）
 
+> **作用**：把 CDH / AA / ASR 三个守护进程按正确顺序拉起来，它们是机密数据分发与证明的核心服务。
+
 ```bash
+# 目录：~/guest-components（服务器）
 cd ~/guest-components
+
+# 启动 CDH：AA_KBC_PARAMS 指定用离线 KBC（不连远端）；OFFLINE_FS_KBC_EXTRA_FILE_PATH 指向步骤 3 的资源文件
+#   nohup ... & 后台运行；stdout/stderr 重定向到日志；CDH 起好会监听 cdh.sock
 AA_KBC_PARAMS="offline_fs_kbc::null" OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json" \
   nohup ./target/debug/ttrpc-cdh > ~/cdh.log 2>&1 &
+# 启动 AA（证明代理）：同样用离线 KBC
 AA_KBC_PARAMS="offline_fs_kbc::null" nohup ./target/debug/ttrpc-aa  > ~/aa.log  2>&1 &
+# 启动 ASR（REST 网关）：--features all 是 ASR 二进制 CLI 参数（开 resource+attestation），监听 127.0.0.1:8006
 nohup ./target/debug/api-server-rest --features all > ~/asr.log 2>&1 &
+# 等 1s 后看三个进程各自的启动日志尾巴，确认无报错
 sleep 1; tail -n 5 ~/cdh.log ~/aa.log ~/asr.log
+# 确认 ASR 确实在 8006 监听（仅 loopback）
 ss -tlnp | grep 8006
 ```
 
@@ -146,22 +184,25 @@ ss -tlnp | grep 8006
 
 ### 阶段 E：验证（对应步骤 6；请求/返回参数见附录 C）
 
+> **作用**：端到端验证全链路——探活、取资源、sealed secret 信封机制、AA 证据接口，全部通过即代表部署与连调成功。
+
 ```bash
 # 目录：~/guest-components（服务器）；本块命令在同一 shell 内顺序执行
 cd ~/guest-components
-# E1 探活
+
+# E1 探活：问 ASR 它自身的版本/tee/feature，确认服务活着、且是我们要的构建
 curl -s http://127.0.0.1:8006/info
 # 期望：{"version":"Guest Components Version: <HEAD>","tee":"sample","feature":"all"}
 
-# E2 取资源（ASR → CDH → offline_fs_kbc）
+# E2 取资源：让 ASR→CDH→offline_fs_kbc 把 key/1、key/2 取回来，验证资源链路通
 curl -s http://127.0.0.1:8006/cdh/resource/default/key/1   # 期望：my-dev-secret-key-001
 curl -s http://127.0.0.1:8006/cdh/resource/default/key/2   # 期望：another-secret
 
-# E3 直连 CDH（纯 socket 客户端，无需 env）
+# E3 直连 CDH：用纯 socket 客户端（不经 ASR）直接问 CDH 要资源，验证 CDH socket 通、资源可读（无需任何 env）
 ./target/debug/ttrpc-cdh-tool get-resource --resource-uri "kbs:///default/key/1"
 # 期望：bXktZGV2LXNlY3JldC1rZXktMDAx
 
-# E4 sealed secret 全链路
+# E4 sealed secret 全链路：keygen 生成签名密钥 → seal 把资源封进信封 → unseal 解封，验证签名/信封机制
 mkdir -p /tmp/secrets /run/confidential-containers/cdh/sealed-secret
 ./target/debug/secret keygen --kid my-key --output-dir /tmp/secrets
 cp /tmp/secrets/my-key-public.json /run/confidential-containers/cdh/sealed-secret/my-key
@@ -171,7 +212,7 @@ AA_KBC_PARAMS="offline_fs_kbc::null" OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-re
   ./target/debug/secret unseal --file-path /tmp/sealed-secret.txt --aa-kbc-params "offline_fs_kbc::null"
 cat /tmp/sealed-secret.txt.unsealed   # 期望：my-dev-secret-key-001
 
-# E5 AA evidence（桩）
+# E5 AA evidence：向 AA 要一份"证据"（桩），验证 AA 的 evidence 接口返回形状正确
 curl -s "http://127.0.0.1:8006/aa/evidence?runtime_data=test"   # 期望：{"report_data":"dGVzdA==","svn":"1"}
 ```
 
@@ -636,6 +677,10 @@ curl -s "http://127.0.0.1:8006/aa/token?token_type=kbs"
 ```bash
 # 目录：~/guest-components（服务器）
 cd ~/guest-components
+
+# 7.0 先把 mock 脚本落盘（全新机上没有这个文件）：把「附录 B」的 Python 代码保存为 ~/mock-kbs.py
+#     注意：脚本内 LOG 写死 /home/ubuntu/mock-kbs.log，若登录用户名不是 ubuntu 要改成你的家目录
+
 # 7.1 起 mock KBS（监听 127.0.0.1:8080）
 # 注意：仓库里没有 `mock-kbs` 这个 bin（旧写法 `cargo run --bin mock-kbs` 会报错）；
 #      用附录 B 的 Python mock，落盘为 ~/mock-kbs.py；请求全量记入 ~/mock-kbs.log
@@ -722,6 +767,8 @@ cat ~/mock-kbs.log
 > 说明：早先版本这里给的是 Rust 示意代码，并写了 `cargo run --bin mock-kbs`——**仓库里并不存在该 bin**。
 > 下面这份 Python 桩已在 2 服务器上实测跑通步骤 7：全量记录请求到 `~/mock-kbs.log`，并按 RCAR 协议形状应答
 > `/kbs/v0/auth`（Challenge）→ `/kbs/v0/attest`（token）→ `/kbs/v0/resource/<path>`（Response）。
+>
+> 落盘为 `~/mock-kbs.py` 后，若登录用户名**不是** `ubuntu`，把脚本第 4 行 `LOG = "/home/ubuntu/mock-kbs.log"` 改成你的家目录（如 `/root/mock-kbs.log`），否则会报路径不存在。
 
 ```python
 #!/usr/bin/env python3
