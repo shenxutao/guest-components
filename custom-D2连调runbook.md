@@ -266,7 +266,8 @@ cargo run -p api-server-rest -- --features all
 ```
 
 **说明**
-- 建议三个组件各开一个终端（或 `nohup ... &` / systemd unit 后台运行），便于看日志。实测后台做法（日志在 `~/cdh.log`、`~/aa.log`、`~/asr.log`）：`AA_KBC_PARAMS="offline_fs_kbc::null" OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json" nohup ./target/debug/ttrpc-cdh > ~/cdh.log 2>&1 &`（AA/ASR 同理，ASR 记得带 `--features all`）。
+- 建议三个组件各开一个终端（或 `nohup ... &` / systemd unit 后台运行），便于看日志。
+- 上述 **CDH → AA → ASR** 顺序适用于 `offline_fs_kbc`；若走 `cc_kbc`（连真/假 KBS，见步骤 7），必须改成 **AA → CDH**，否则 CDH 初始化时连不上 AA socket 会启动失败。实测后台做法（日志在 `~/cdh.log`、`~/aa.log`、`~/asr.log`）：`AA_KBC_PARAMS="offline_fs_kbc::null" OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json" nohup ./target/debug/ttrpc-cdh > ~/cdh.log 2>&1 &`（AA/ASR 同理，ASR 记得带 `--features all`）。
 - 用 `make build` 产出的二进制时，把 `cargo run -p X --bin Y` 换成直接执行 `./target/x86_64-unknown-linux-gnu/release/<bin>` 并前置同样的环境变量。
 
 ---
@@ -283,6 +284,7 @@ curl -s http://127.0.0.1:8006/info | head
 curl -s http://127.0.0.1:8006/cdh/resource/default/key/1
 # 期望：返回你在 /tmp/dev-resources.json 里放的 default/key/1 资源
 #       （请求经 ASR → CDH → offline_fs_kbc 取回）
+# 错误路径（实测）：资源不存在（如 default/key/99）或空路径 → 返回 "ttrpc request error" + HTTP 500
 ```
 
 <a id="step62"></a>
@@ -293,6 +295,8 @@ cargo run -p confidential-data-hub --bin ttrpc-cdh-tool -- \
 # 说明：ttrpc-cdh-tool 是仓库自带 ttrpc 客户端（confidential-data-hub/hub/src/bin/ttrpc-cdh-tool.rs）
 #      子命令是 kebab-case 的 get-resource（不是 GetResource）
 #      --socket 有默认值 unix:///run/confidential-containers/cdh.sock，可省略
+#      该工具是纯 socket 客户端：实测不带 AA_KBC_PARAMS / OFFLINE_FS_KBC_EXTRA_FILE_PATH 也能取到值
+#      （资源由 CDH 侧的环境变量决定），故前置 env 可省
 #      期望输出：base64 串（如 bXktZGV2LXNlY3JldC1rZXktMDAx，即 my-dev-secret-key-001）
 ```
 
@@ -338,6 +342,7 @@ cat /tmp/sealed-secret.txt.unsealed   # 应等于 my-dev-secret-key-001
 ```bash
 curl -s "http://127.0.0.1:8006/aa/evidence?runtime_data=test"
 # 期望（sample attester 桩）：{"report_data":"<base64(runtime_data)>","svn":"1"}，如 dGVzdA== = "test"
+# 实测：runtime_data 必填，不带该参数返回 "BAD REQUEST"
 curl -s "http://127.0.0.1:8006/aa/token?token_type=kbs"
 # 期望：合法 token_type 只有 kbs / coco_as（传 default 会报 "Unsupported token type"）；
 #       offline_fs_kbc 下没有真 KBS 端点发 token，返回明确错误属预期（真机 + 真 KBS 才出 token）
@@ -349,13 +354,40 @@ curl -s "http://127.0.0.1:8006/aa/token?token_type=kbs"
 **背景**：仅当你想验证 `cc_kbc::https://<mock>` 这条「AA → 真 KBS 形态」的客户端 HTTP 行为时才需要（替代 Beeceptor）。**只验证请求/响应形状，不做真证明**（无 RCAR challenge/response 握手）。
 
 ```bash
-# 7.1 起一个最小 mock KBS（监听 :8080，见附录 B），对资源请求返回固定 base64 值
-cargo run --bin mock-kbs
+# 7.1 起 mock KBS（监听 127.0.0.1:8080）
+# 注意：仓库里没有 `mock-kbs` 这个 bin（旧写法 `cargo run --bin mock-kbs` 会报错）；
+#      用附录 B 的 Python mock，落盘为 ~/mock-kbs.py；请求全量记入 ~/mock-kbs.log
+python3 ~/mock-kbs.py &
 
-# 7.2 让 AA/CDH 走这个桩
-export AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080"
-# 然后按步骤 5 重启 CDH / AA
+# 7.2 自检桩本身可用（应返回 Challenge JSON）
+curl -s -X POST http://127.0.0.1:8080/kbs/v0/auth -H "Content-Type: application/json" -d '{}'
+
+# 7.3 让 AA/CDH 走这个桩 —— 顺序必须是 AA → CDH（见下方说明）
+AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080" nohup ./target/debug/ttrpc-aa  > ~/aa-cckbc.log  2>&1 &
+sleep 2
+AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080" nohup ./target/debug/ttrpc-cdh > ~/cdh-cckbc.log 2>&1 &
+
+# 7.4 触发一次取资源，然后看 mock 收到了什么
+curl -s -m 25 -w "\n[HTTP %{http_code}]\n" http://127.0.0.1:8006/cdh/resource/default/key/1
+cat ~/mock-kbs.log
+
+# 7.5 测完恢复离线环境：按步骤 5 用 offline_fs_kbc 重启 AA / CDH
 ```
+
+**实测结果（2026-10-23，腾讯云 2 服务器）**
+- mock 收到**真实请求**：`POST /kbs/v0/auth`，body =
+  `{"version":"0.4.0","tee":"sample","extra-params":{"supported-hash-algorithms":["sha256","sha384","sha512","sm3"]}}`
+  （共 5 次重试、间隔 1s）→ **cc_kbc 的 HTTP 通路确实打通**，端点与报文形状与 `kbs_protocol` 的 RCAR 定义一致。
+- 请求最终失败：ASR 返回 `ttrpc request error after reconnect` + HTTP 500；CDH 日志
+  `GetTokenFailed("Attestation Agent token provider error: ... AA-KBC get token failed")`。
+  完整 RCAR 需要**真 KBS 验明 + 真证据**，mock 不做验明、测试 VM 无 TEE，因此拿不到 token——
+  **这正符合本节「只验证请求/响应形状，不做真证明」的定位**；真机 + 真 Trustee 才拿得到 token（见步骤 8）。
+
+**说明（两个必踩的坑）**
+- **启动顺序要反过来：AA → CDH**。`cc_kbc` 模式下 CDH 初始化 KBS 客户端时要连 AA 的 ttrpc socket 建 token provider；沿用步骤 5 的 CDH → AA，CDH 会直接启动失败：
+  `init Hub failed: kbs client creation failed: ... AATokenProvider("ttrpc connect failed ... Connection refused (os error 111)")`。
+  `offline_fs_kbc` 模式无此要求（原顺序可用）。
+- **ASR 无需重启**：ASR 只是 REST 网关，KBC 指向由 CDH/AA 侧的环境变量决定。
 
 ---
 
@@ -403,26 +435,73 @@ export AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080"
 ---
 
 <a id="appendixb"></a>
-## 附录 B：最小 mock KBS（Rust，hyper，仅示意）
+## 附录 B：最小 mock KBS（Python，**步骤 7 实测在用**，可直接复制为 `~/mock-kbs.py`）
 
-```rust
-use hyper::{Body, Request, Response, Server, service::{make_service_fn, service_fn}};
+> 说明：早先版本这里给的是 Rust 示意代码，并写了 `cargo run --bin mock-kbs`——**仓库里并不存在该 bin**。
+> 下面这份 Python 桩已在 2 服务器上实测跑通步骤 7：全量记录请求到 `~/mock-kbs.log`，并按 RCAR 协议形状应答
+> `/kbs/v0/auth`（Challenge）→ `/kbs/v0/attest`（token）→ `/kbs/v0/resource/<path>`（Response）。
 
-async fn handle(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
-    // 真实 KBS: GET /kbs/v0/resource/<path> 返回 base64 资源；此处返回固定桩
-    Ok(Response::new(Body::from("base64-encoded-secret")))
-}
+```python
+#!/usr/bin/env python3
+import json, datetime, base64
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-#[tokio::main]
-async fn main() {
-    let addr = ([0, 0, 0, 0], 8080).into();
-    Server::bind(&addr)
-        .serve(make_service_fn(|_| async {
-            Ok::<_, hyper::Error>(service_fn(handle))
-        }))
-        .await
-        .unwrap();
-}
+LOG = "/home/ubuntu/mock-kbs.log"
+
+def b64url(s):
+    if isinstance(s, str):
+        s = s.encode()
+    return base64.urlsafe_b64encode(s).decode().rstrip("=")
+
+FAKE_JWT = (b64url(json.dumps({"alg": "ES256", "typ": "JWT"})) + "."
+            + b64url(json.dumps({"iss": "mock-kbs", "exp": 9999999999})) + "."
+            + b64url("mock-signature"))
+
+class Handler(BaseHTTPRequestHandler):
+    def _log(self, body=b""):
+        with open(LOG, "a") as f:
+            f.write("%s %s %s\n" % (datetime.datetime.now().isoformat(), self.command, self.path))
+            hdrs = {k: v for k, v in self.headers.items()
+                    if k.lower() in ("content-type", "authorization", "accept", "content-length")}
+            f.write("  headers: %s\n" % json.dumps(hdrs))
+            if body:
+                f.write("  body: %s\n" % body.decode("utf-8", "replace"))
+
+    def _send(self, obj, code=200):
+        data = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(n) if n else b""
+        self._log(body)
+        if self.path.endswith("/auth"):
+            self._send({"nonce": b64url("mock-nonce"), "extra_params": {"algorithm": "sha256"}})
+        elif self.path.endswith("/attest"):
+            self._send({"token": FAKE_JWT})
+        else:
+            self._send({"code": 404, "message": "mock: unknown POST path"}, 404)
+
+    def do_GET(self):
+        self._log()
+        if "/resource/" in self.path:
+            self._send({"code": 200,
+                        "message": "mock resource (real KBS returns encrypted payload)",
+                        "data": b64url("mock-resource-plaintext")})
+        else:
+            self._send({"code": 404, "message": "mock: unknown GET path"}, 404)
+
+    def log_message(self, *args):
+        pass
+
+if __name__ == "__main__":
+    open(LOG, "w").close()
+    print("mock KBS listening on 127.0.0.1:8080, log: %s" % LOG, flush=True)
+    HTTPServer(("127.0.0.1", 8080), Handler).serve_forever()
 ```
 
 ---

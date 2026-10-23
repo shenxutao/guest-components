@@ -1,7 +1,7 @@
 # D2 腾讯云 Ubuntu 连调执行记录（2026-10-22）
 
 > 本文件是 `custom-D2连调runbook.md` 的实测执行记录。服务器 = 腾讯云 2 服务器（`<2服务器IP>`，ubuntu）。
-> 结论：**runbook 步骤 0–6 全部执行完毕，验证全部通过**（步骤 7 mock KBS 为可选项，未执行）。
+> 结论：**runbook 步骤 0–7 全部执行完毕**——步骤 0–6 验证全部通过；步骤 7（mock KBS 测 cc_kbc HTTP 路径）于 2026-10-23 补测完成（见第 7 节，含真实 HTTP 报文记录）。
 
 ## 0. 环境事实
 
@@ -123,3 +123,75 @@ printf '[url "https://ghfast.top/https://github.com/"]\n\tinsteadOf = https://gi
 - `pgrep -f "bin/cargo"` 会匹配到远程 shell 自身导致误杀，用正则技巧 `"bi[n]/cargo"`。
 - 杀进程按 PID `kill`（不会被审批拦截）；`pkill`/`rm -rf`/`git config` 会被沙箱审批拦截。
 - 单条命令里 `sleep` 超过 ~25s 会触发空闲超时取消；长任务用 `nohup … &` + 日志轮询。
+
+---
+
+## 7. 追加测试（2026-10-23）：回归扩展 + 步骤 7 mock KBS
+
+### 7.1 A 批：已通链路的回归扩展（环境不变，仍为 offline_fs_kbc）
+
+一次 SSH 内执行的命令：
+```bash
+curl -s http://127.0.0.1:8006/info
+curl -s http://127.0.0.1:8006/cdh/resource/default/key/1
+curl -s http://127.0.0.1:8006/cdh/resource/default/key/2
+curl -s -w "\n[HTTP %{http_code}]\n" http://127.0.0.1:8006/cdh/resource/default/key/99   # 不存在
+curl -s -w "\n[HTTP %{http_code}]\n" http://127.0.0.1:8006/cdh/resource/                  # 空路径
+./target/debug/ttrpc-cdh-tool get-resource --resource-uri "kbs:///default/key/2"          # 不带任何 env
+curl -s "http://127.0.0.1:8006/aa/evidence?runtime_data=hello"
+curl -s "http://127.0.0.1:8006/aa/evidence"                                               # 无参数
+ss -tlnp | grep 8006
+ls -la /run/confidential-containers/attestation-agent/
+```
+
+| 项 | 结果 | 判定 |
+|---|---|---|
+| `/info` | `{"version":"Guest Components Version: 8d68afe8","tee":"sample","feature":"all"}` | ✅ |
+| `/cdh/resource/default/key/1` | `my-dev-secret-key-001` | ✅ |
+| `/cdh/resource/default/key/2` | **`another-secret`** | ✅ 第二条资源也通 |
+| `default/key/99`（不存在） | `ttrpc request error` + **HTTP 500** | ✅ 错误路径可预期 |
+| `/cdh/resource/`（空路径） | `ttrpc request error` + **HTTP 500** | ✅ 同上 |
+| `ttrpc-cdh-tool …key/2`（**不带 env**） | `YW5vdGhlci1zZWNyZXQ=`（= base64 "another-secret"） | ✅ 证明该工具是**纯 socket 客户端**，无需 `AA_KBC_PARAMS` |
+| `evidence?runtime_data=hello` | `{"report_data":"aGVsbG8=","svn":"1"}`（= base64 "hello"） | ✅ 参数经 base64 回填 |
+| `evidence`（无 `runtime_data`） | **`BAD REQUEST`** | ✅ 参数必填 |
+| `ss -tlnp \| grep 8006` | `LISTEN 127.0.0.1:8006`（pid 133070，仅 loopback） | ✅ 非 loopback 不可达 |
+| AA socket | `/run/confidential-containers/attestation-agent/attestation-agent.sock` 存在 | ✅ |
+
+### 7.2 步骤 7：mock KBS 测 cc_kbc 真 HTTP 路径
+
+**前置修正**：runbook 写的 `cargo run --bin mock-kbs` **在仓库里并不存在**（附录 B 只是示意代码）。本次改用自写 Python mock `~/mock-kbs.py`（监听 127.0.0.1:8080，全量记录请求，并按 RCAR 协议形状应答）。
+
+mock 自检（直连 8080，确认桩本身可用）：
+```
+POST /kbs/v0/auth   -> {"nonce":"bW9jay1ub25jZQ","extra_params":{"algorithm":"sha256"}}
+POST /kbs/v0/attest -> {"token":"eyJhbGciOiAiRVMyNTYiLCAidHlwIjogIkpXVCJ9.eyJpc3MiOiAibW9jay1rYnMiLCAiZXhwIjogOTk5OTk5OTk5OX0.bW9jay1zaWduYXR1cmU"}
+GET  /kbs/v0/resource/default/key/1 -> {"code":200,"message":"mock resource (real KBS returns encrypted payload)","data":"bW9jay1yZXNvdXJjZS1wbGFpbnRleHQ"}
+```
+
+**关键发现 1：cc_kbc 模式启动顺序必须 AA → CDH（与 runbook 的 CDH→AA 相反）**
+先按原顺序起，CDH 直接启动失败：
+```
+init Hub failed: kbs client creation failed: KbsClientError("create AA token provider failed:
+AATokenProvider(\"ttrpc connect failed Others(\\\"Socket::connect error Connection refused (os error 111)\\\")\")")
+```
+CDH 在 cc_kbc 模式初始化时要连 AA 的 ttrpc socket 建 token provider（offline_fs_kbc 模式不需要，故原顺序能跑通）。改成先起 AA 再起 CDH，CDH 正常监听，日志：`kms::plugins::kbs::cc_kbc: KBS_CERT get failed: NotPresent. Use no KBS public key certs.`
+
+**关键发现 2：真实 HTTP 报文已打到 mock（cc_kbc 通路确认打通）**
+触发 `curl -m 25 http://127.0.0.1:8006/cdh/resource/default/key/1` 后，mock 侧记录（5 次重试，间隔 1s）：
+```
+2026-10-23T10:22:07.640975 POST /kbs/v0/auth
+  headers: {"content-type":"application/json","accept":"*/*","content-length":"114"}
+  body: {"version":"0.4.0","tee":"sample","extra-params":{"supported-hash-algorithms":["sha256","sha384","sha512","sm3"]}}
+2026-10-23T10:22:08 / :09 / :10 / :11  POST /kbs/v0/auth   # 同形报文共 5 次
+```
+URL、端点、body 形状完全符合 `kbs_protocol` 的 RCAR 定义（`version`/`tee`/`extra-params`）。
+
+**失败点（预期内）**：ASR 返回 `ttrpc request error after reconnect` + HTTP 500；CDH 日志：
+```
+Get Resource failed: Kbs client error: get resource failed: GetTokenFailed(
+  "Attestation Agent token provider error: cal ttrpc failed: RpcStatus{ code: INTERNAL,
+   message: \"[ERROR:attestation-agent] AA-KBC get token failed\" }")
+```
+完整 RCAR 需要**真 KBS 验明 + 真证据**；mock 只应答协议形状、不做验明，且测试 VM 无 TEE 无真证据 → token 拿不到。这正是 runbook 步骤 7 声明的「只验证请求/响应形状，不做真证明」的正当结果；真机 + 真 Trustee 才能拿到 token（步骤 8）。
+
+**收尾**：停掉 cc_kbc 版 CDH/AA 与 mock，恢复 `offline_fs_kbc::null`（AA 257149 → CDH 257168），复测 key/1、key/2、evidence 全通。
