@@ -87,6 +87,19 @@ bash scripts/setup-server.sh
 脚本见 `scripts/setup-server.sh`：装 `build-essential`/`pkg-config`/`libssl-dev`/`protobuf-compiler`/`clang`/`libclang-dev`/`cmake`/`musl-tools`，装 rustup 并加 `x86_64-unknown-linux-musl` 目标。
 > 轻量服务器内存小（常见 2G）时建议加 2G swap 防编译 OOM：`sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`
 
+> **国内服务器必做（腾讯云等；2026-10-22 已在 2 服务器实测）**：`static.rust-lang.org` 与 `github.com` 在国内基本不可达——脚本会在「装 rustup」步卡死（下载 0 字节），后续 cargo 拉 git 依赖也会失败。先配好镜像再跑脚本（或脚本卡住后补配再重跑）：
+> ```bash
+> # ① rustup 工具链走腾讯云镜像（TUNA 同步滞后、可能缺 1.95.0，勿用；官方源被墙）
+> export RUSTUP_DIST_SERVER=https://mirrors.cloud.tencent.com/rustup
+> export RUSTUP_UPDATE_ROOT=https://mirrors.cloud.tencent.com/rustup/rustup
+> # ② crates.io 走 rsproxy 稀疏索引 + cargo 改用 git CLI 拉依赖（③的 insteadOf 才生效）
+> mkdir -p ~/.cargo
+> printf '[source.crates-io]\nreplace-with = "rsproxy-sparse"\n\n[source.rsproxy-sparse]\nregistry = "sparse+https://rsproxy.cn/index/"\n\n[net]\ngit-fetch-with-cli = true\n' > ~/.cargo/config.toml
+> # ③ GitHub git 依赖走 ghfast.top 代理，并强制 HTTP/1.1（ghproxy.net 会截断大文件，勿用）
+> printf '[url "https://ghfast.top/https://github.com/"]\n\tinsteadOf = https://github.com/\n[http]\n\tversion = HTTP/1.1\n' > ~/.gitconfig
+> ```
+> 原因：本仓库有多个 GitHub git 依赖（`occlum/occlum`、`intel/…tee.dcap`、`NVIDIA/attestation-sdk`、`mdaffin/loopdev`），occlum 还带子模块（teaclave-sgx-sdk 等），**cargo 解析阶段就要拉全**，不配代理直接失败。 rustup-init 可从镜像下载：`https://mirrors.cloud.tencent.com/rustup/rustup/dist/x86_64-unknown-linux-gnu/rustup-init`。
+
 **0.2 把「当前分支」代码带到服务器（本地 Mac 执行）**
 当前分支 `2026-10-21-dev` 有未推提交，不能用远端 clone；用 `git bundle`：
 ```bash
@@ -136,14 +149,18 @@ git status -sb                              # 确认领先/落后状态
 
 ```bash
 # 方式 A（推荐，迭代快）：直接用 cargo 编 D2 相关包，原生目标无需 musl
-cargo build -p confidential-data-hub -p attestation-agent -p api-server-rest
-# 产物在 target/debug/ 下
+cargo build -p confidential-data-hub -p api-server-rest
+# AA 必须显式带 bin 特性才会产出 ttrpc-aa 二进制（其 [[bin]] 有 required-features，默认特性不含 bin）：
+cargo build -p attestation-agent --no-default-features --features "kbs,coco_as,bin,ttrpc"
+# 产物在 target/debug/ 下：ttrpc-cdh / api-server-rest / ttrpc-aa / secret / ttrpc-cdh-tool
+# 注：不带任何 attester 特性时，AA 运行期 detect_tee_type() 自动回退 sample attester（测试 VM 正合适）；
+#     若编 all-attesters，需先 `sudo apt install libtss2-dev`（tpm-attester 的 C 依赖）等
 ```
 
 **说明**
 - `cargo build` 默认用本机原生目标（x86_64-unknown-linux-gnu），**不需要 musl 交叉工具链**。musl 静态链接仅用于最终打包进 guest 镜像，开发期可跳过。
 - 二进制命名有两条口径，二选一即可：
-  - **cargo 口径**：AA 的 bin 名是 `ttrpc-aa` / `grpc-aa`（见 `attestation-agent/attestation-agent/Cargo.toml:9-19`）；CDH、ASR 的包名即 bin 名（`confidential-data-hub`、`api-server-rest`）。
+  - **cargo 口径**：AA 的 bin 名是 `ttrpc-aa` / `grpc-aa`（见 `attestation-agent/attestation-agent/Cargo.toml:9-19`）；**CDH 的 bin 名是 `ttrpc-cdh`（不是包名 `confidential-data-hub`）**；ASR 的包名即 bin 名（`api-server-rest`）。
   - **Makefile 口径**：顶层 `Makefile:53-55` 规定产物名就是 `confidential-data-hub` / `attestation-agent` / `api-server-rest`（见步骤 5 用 `make build` 时）。
 - 若想贴近 CI / 产出与最终镜像一致的静态二进制：
   ```bash
@@ -212,23 +229,29 @@ export OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json"
 ```bash
 # 5.0 创建运行时目录（socket / 凭据路径）
 sudo mkdir -p /run/confidential-containers
+# 以非 root 用户运行时必须把属主交给该用户，否则 CDH/AA 启动即
+# "failed to create /run/confidential-containers/cdh: Permission denied"：
+sudo chown -R "$(id -un):$(id -gn)" /run/confidential-containers
 
 # 5.1 启动 CDH（机密数据中枢）
 AA_KBC_PARAMS="offline_fs_kbc::null" \
 OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json" \
-cargo run -p confidential-data-hub --bin confidential-data-hub
-# 说明：bin 名 confidential-data-hub（Makefile:52）；启动后应监听 cdh.sock
-#      若端口/socket 冲突，先 sudo rm -f /run/confidential-containers/cdh.sock
+cargo run -p confidential-data-hub --bin ttrpc-cdh
+# 说明：cargo 口径的 bin 名是 ttrpc-cdh（make build 产物才叫 confidential-data-hub，Makefile:53-55）
+#      启动后监听 cdh.sock；若 socket 冲突，先 sudo rm -f /run/confidential-containers/cdh.sock
 
 # 5.2 启动 AA（证明代理，ttrpc 服务）
 AA_KBC_PARAMS="offline_fs_kbc::null" \
-cargo run -p attestation-agent --bin ttrpc-aa
-# 说明：AA 的 cargo bin 是 ttrpc-aa / grpc-aa（Cargo.toml:9-19）；若用 make build 则产物名 attestation-agent
-#      非 TEE 机器调用 evidence 接口会返回桩数据或明确错误，属预期（无硬件证据）
+cargo run -p attestation-agent --no-default-features --features "kbs,coco_as,bin,ttrpc" --bin ttrpc-aa
+# 说明：必须带 bin 特性（否则 cargo 报 "target `ttrpc-aa` requires the features `bin`"）
+#      非 TEE 机器：启动日志提示回退 sample attester，evidence 返回桩数据，属预期
 
 # 5.3 启动 ASR（REST 网关）
-cargo run -p api-server-rest --bin api-server-rest
-# 说明：监听 127.0.0.1:8006；仅 loopback，外部访问 403
+cargo run -p api-server-rest -- --features all
+# 说明：--features all 是 ASR 二进制自己的 CLI 参数（resource+attestation 全开），必须经 `--` 传给二进制；
+#      它不是 cargo 特性（ASR 的 Cargo.toml 无 [features] 段），放到 `--` 之前会报
+#      "none of the selected packages contains these features: all"
+#      监听 127.0.0.1:8006；仅 loopback，外部访问 403
 ```
 
 **说明**
@@ -255,10 +278,11 @@ curl -s http://127.0.0.1:8006/cdh/resource/default/key/1
 ### 6.2 image-rs 直连 CDH（验证 kbs:// → offline_fs_kbc 通路）
 ```bash
 cargo run -p confidential-data-hub --bin ttrpc-cdh-tool -- \
-  --socket /run/confidential-containers/cdh.sock \
-  GetResource --resource-uri "kbs:///default/key/1"
+  get-resource --resource-uri "kbs:///default/key/1"
 # 说明：ttrpc-cdh-tool 是仓库自带 ttrpc 客户端（confidential-data-hub/hub/src/bin/ttrpc-cdh-tool.rs）
-#      若 CLI 参数不符，以该文件实际定义为准
+#      子命令是 kebab-case 的 get-resource（不是 GetResource）
+#      --socket 有默认值 unix:///run/confidential-containers/cdh.sock，可省略
+#      期望输出：base64 串（如 bXktZGV2LXNlY3JldC1rZXktMDAx，即 my-dev-secret-key-001）
 ```
 
 <a id="step63"></a>
@@ -267,35 +291,45 @@ cargo run -p confidential-data-hub --bin ttrpc-cdh-tool -- \
 
 **本地端到端（Vault + offline_fs_kbc，走真验签）**：
 ```bash
-# 生成 P-256 签名密钥对
-cargo run -p confidential-data-hub --bin secret -- keygen --kid my-key --output_dir /tmp/secrets
+# 0) keygen 不会自建目录，先建输出目录（漏这步会 panic: Failed to write .../my-key-private.json）
+mkdir -p /tmp/secrets /run/confidential-containers/cdh/sealed-secret
 
-# 放验签公钥到 SIGNING_CREDENTIALS_PATH（需 root，因在 /run 下）
-sudo mkdir -p /run/confidential-containers/cdh/sealed-secret
-sudo cp /tmp/secrets/my-key-public.json /run/confidential-containers/cdh/sealed-secret/my-key
+# 1) 生成 P-256 签名密钥对（JWK；参数是 kebab-case）
+cargo run -p confidential-data-hub --bin secret -- keygen --kid my-key --output-dir /tmp/secrets
 
-# 密封一个指向 KBS 资源的 Vault secret
-cargo run -p confidential-data-hub --bin secret -- seal --type vault \
-  --resource_uri "kbs:///default/key/1" --provider kbs \
-  --signing_kid my-key --signing_jwk_path /tmp/secrets/my-key-private.json \
-  | tee /tmp/sealed-secret.txt
+# 2) 放验签公钥到 SIGNING_CREDENTIALS_PATH/<kid>
+#    （= /run/confidential-containers/cdh/sealed-secret/my-key，hub/src/secret/mod.rs:29；
+#      目录已按 5.0 chown 则不需要 sudo）
+cp /tmp/secrets/my-key-public.json /run/confidential-containers/cdh/sealed-secret/my-key
 
-# 解封（AA_KBC_PARAMS 让 kbs provider 走 offline_fs_kbc）
+# 3) 密封一个指向 KBS 资源的 Vault secret（vault 是 seal 的子命令，不是 --type 参数）
+#    坑：vault 的 seal 会先往 stdout 打一行 "Warning: Secrets must be provisioned to provider separately."，
+#        必须 tail -n +2 滤掉，否则解封报 ParseFailed("Failed to parse JWS")；
+#        产物本身带 sealed. 前缀，解封端会自动 trim 掉，不用手动处理
+cargo run -p confidential-data-hub --bin secret -- \
+  seal --signing-kid my-key --signing-jwk-path /tmp/secrets/my-key-private.json \
+  vault --resource-uri "kbs:///default/key/1" --provider kbs \
+  | tail -n +2 > /tmp/sealed-secret.txt
+
+# 4) 解封（--aa-kbc-params 让 kbs provider 走 offline_fs_kbc；验签公钥来自步骤 2 的文件；
+#    --key-path 仅对 aliyun/aws provider 有意义，kbs 不用传）
 AA_KBC_PARAMS="offline_fs_kbc::null" \
 OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json" \
-cargo run -p confidential-data-hub --bin secret -- unseal \
-  --file_path /tmp/sealed-secret.txt --aa_kbc_params "offline_fs_kbc::null"
+cargo run -p confidential-data-hub --bin secret -- \
+  unseal --file-path /tmp/sealed-secret.txt --aa-kbc-params "offline_fs_kbc::null"
 
 cat /tmp/sealed-secret.txt.unsealed   # 应等于 my-dev-secret-key-001
 ```
-**说明**：信封格式、Envelope/Vault 区别、`kid` 寻址、`SKIP_SEALED_SECRET_VERIFICATION` 等见 `custom-CDH-SealedSecret.md`；`/tmp/dev-resources.json` 来自步骤 3（含 `default/key/1`）。
+**说明**：信封格式、Envelope/Vault 区别、`kid` 寻址、`unseal --skip-verification`（跳过验签）等见 `custom-CDH-SealedSecret.md`；`/tmp/dev-resources.json` 来自步骤 3（含 `default/key/1`）。
 
 <a id="step64"></a>
 ### 6.4 AA evidence / token（桩）
 ```bash
 curl -s "http://127.0.0.1:8006/aa/evidence?runtime_data=test"
-curl -s "http://127.0.0.1:8006/aa/token?token_type=default"
-# 期望：none / all-attester 下返回桩数据或明确错误（非 TEE 无真证据，属预期）
+# 期望（sample attester 桩）：{"report_data":"<base64(runtime_data)>","svn":"1"}，如 dGVzdA== = "test"
+curl -s "http://127.0.0.1:8006/aa/token?token_type=kbs"
+# 期望：合法 token_type 只有 kbs / coco_as（传 default 会报 "Unsupported token type"）；
+#       offline_fs_kbc 下没有真 KBS 端点发 token，返回明确错误属预期（真机 + 真 KBS 才出 token）
 ```
 
 <a id="step7"></a>
@@ -392,4 +426,6 @@ async fn main() {
 - `image-rs/src/resource/kbs/ttrpc.rs`（cdh.sock 约定 `:16`）
 - `image-rs/scripts/install_offline_fs_kbc_files.sh`（生成/安装 resources JSON）
 - `confidential-data-hub/hub/src/bin/secret_cli.rs`（sealed secret 样例；**二进制名是 `secret`**）
+- `confidential-data-hub/hub/src/secret/mod.rs`（SIGNING_CREDENTIALS_PATH `:29`、`sealed.` 前缀解析 `:77`）
+- 本 runbook 的实测执行记录（2026-10-22，腾讯云 2 服务器，含国内镜像适配、问题与解法）：`custom-D2连调执行记录.md`
 - 仓库已翻译文档：`confidential-data-hub/custom-README.md`、`attestation-agent/docs/custom-IMPLEMENTATION.md`
