@@ -1,13 +1,13 @@
 # D2 腾讯云 Ubuntu 连调执行记录（2026-10-22）
 
-> 本文件是 `custom-D2连调runbook.md` 的实测执行记录。服务器 = 腾讯云 2 服务器（`<2服务器IP>`，ubuntu）。
+> 本文件是 `custom-D2连调runbook.md` 的实测执行记录。服务器 = 腾讯云 2 服务器（`111.229.159.237`，ubuntu）。
 > 结论：**runbook 步骤 0–7 全部执行完毕**——步骤 0–6 验证全部通过；步骤 7（mock KBS 测 cc_kbc HTTP 路径）于 2026-10-23 补测完成（见第 7 节，含真实 HTTP 报文记录）。
 
 ## 0. 环境事实
 
 | 项 | 值 |
 |---|---|
-| 服务器 | <2服务器IP>（腾讯云，VM-0-17-ubuntu） |
+| 服务器 | 111.229.159.237（腾讯云，VM-0-17-ubuntu） |
 | 系统 | Ubuntu 24.04.4 LTS x86_64（runbook 首选版本） |
 | 资源 | 3.6 GiB 内存 + 1.9 GiB swap、40G 盘（余 33G）——编译无 OOM |
 | 代码 | `~/guest-components`，分支 `2026-10-21-dev`，HEAD `8d68afe8`（git bundle 方式上服务器） |
@@ -19,7 +19,7 @@
 ```bash
 # Mac 本地
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev     # 5.5M
-scp /tmp/gc-dev.bundle ubuntu@<2服务器IP>:~/
+scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
 # 服务器
 git clone ~/gc-dev.bundle guest-components && git checkout 2026-10-21-dev
 ```
@@ -100,7 +100,7 @@ nohup ./target/debug/api-server-rest --features all &
 - 守护进程（nohup 后台）：`ttrpc-cdh`、`ttrpc-aa`、`api-server-rest --features all`；日志在 `~/cdh.log`、`~/aa.log`、`~/asr.log`。
 - 一键复测：
 ```bash
-ssh ubuntu@<2服务器IP>
+ssh ubuntu@111.229.159.237
 curl -s http://127.0.0.1:8006/info
 curl -s http://127.0.0.1:8006/cdh/resource/default/key/1      # 期望 my-dev-secret-key-001
 ```
@@ -243,7 +243,7 @@ cargo --version && rustc --version && protoc --version
 ```bash
 cd "/Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components"
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev      # 实测 5.5M
-scp /tmp/gc-dev.bundle ubuntu@<2服务器IP>:~/
+scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
 # 服务器
 git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkout 2026-10-21-dev
 ```
@@ -363,7 +363,7 @@ cat ~/mock-kbs.log
 
 ```bash
 # 1) 连上去
-ssh ubuntu@<2服务器IP>
+ssh ubuntu@111.229.159.237
 
 # 2) 确认三进程是否在跑
 pgrep -af 'ttrpc-cdh|ttrpc-aa|api-server-rest'

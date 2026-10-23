@@ -73,7 +73,7 @@ sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapf
 # Mac
 cd "/Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components"
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev && ls -lh /tmp/gc-dev.bundle
-scp /tmp/gc-dev.bundle ubuntu@<服务器IP>:~/
+scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
 
 # 服务器
 git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkout 2026-10-21-dev
@@ -189,7 +189,7 @@ curl -s "http://127.0.0.1:8006/aa/evidence?runtime_data=test"   # 期望：{"rep
 bash scripts/setup-server.sh
 
 # 2) 取代码（Mac 上打包，服务器上还原）
-git bundle create /tmp/gc-dev.bundle 2026-10-21-dev && scp /tmp/gc-dev.bundle ubuntu@<IP>:~/
+git bundle create /tmp/gc-dev.bundle 2026-10-21-dev && scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
 #   服务器上：git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkout 2026-10-21-dev
 
 # 3) 构建（AA 必须带 bin 特性才产出 ttrpc-aa；首编全树约 10–15 分钟）
@@ -270,7 +270,7 @@ bash scripts/setup-server.sh
 # Mac 上：打包分支（含全部本地提交）
 cd "/Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components"
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev
-scp /tmp/gc-dev.bundle ubuntu@<服务器IP>:~/
+scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
 ```
 ```bash
 # 服务器上：从 bundle 还原
