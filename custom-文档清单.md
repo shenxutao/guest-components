@@ -53,21 +53,25 @@ git log --oneline <基准commit>..upstream/main -- confidential-data-hub/docs/SE
 | 32 | [ocicrypt-rs/data/custom-generate_keys.md](ocicrypt-rs/data/custom-generate_keys.md) | [ocicrypt-rs/data/generate_keys.md](ocicrypt-rs/data/generate_keys.md) | 5d882e15@2023-06-02 | 翻译 | 测试密钥生成脚本说明：用 openssl 生成单测/集成测试所需的 RSA/EC 密钥、证书与口令文件 |
 | 33 | [custom-项目理解.md](custom-项目理解.md) | （无原文） | — | **个人新增** | 个人原创：基于源码核实的项目架构理解（含组件/feature/时序） |
 | 34 | [custom-个人开发指南.md](custom-个人开发指南.md) | （无原文） | — | **个人新增** | 个人原创：D2 主责（CSV attester + CDH sealed secret）开发指南 |
-| 35 | [custom-D2连调runbook.md](custom-D2连调runbook.md) | （无原文） | — | **个人新增** | 个人原创：D2 连调详细指南（**顶部带锚点目录可跳转**；逐步骤命令+说明；offline_fs_kbc + none/all attester 免 Beeceptor；**步骤 8 含「测试 VM → 真海光 CSV」迁移映射，双用途**；含 mock KBS 草图） |
+| 35 | [custom-D2连调runbook.md](custom-D2连调runbook.md) | （无原文） | — | **个人新增** | 个人原创：D2 连调详细指南（**顶部带锚点目录可跳转**；逐步骤命令+说明；offline_fs_kbc + none/all attester 免 Beeceptor；**步骤 8 含「测试 VM → 真海光 CSV」迁移映射，双用途**；**步骤 7 已实测：附录 B 提供可直接运行的 Python mock KBS，并说明 cc_kbc 模式启动顺序须 AA→CDH**） |
 | 36 | [custom-CDH-SealedSecret.md](custom-CDH-SealedSecret.md) | （无原文） | — | **个人新增** | 个人原创：CDH sealed secret 信封格式（JWS ES256 外层 + Envelope/Vault 内层）与 secret_cli（二进制名 `secret`）用法、本地 Vault+offline_fs_kbc 端到端配方 |
 | 37 | [custom-真机CSV部署.md](custom-真机CSV部署.md) | （无原文） | — | **个人新增** | 个人原创：真海光 CSV 机密服务器部署指南（D2 收尾/生产验明）；复用测试 VM 逻辑，只讲真机专属（构建口径/KBC 指向真 KBS/sealed secret 密钥预置/CSV 证据链路/kata 接入/验证检查表） |
 | 38 | [custom-CSV证据与Trustee对齐.md](custom-CSV证据与Trustee对齐.md) | （无原文） | — | **个人新增** | 个人原创：D2↔D4 跨仓协调；CSV attester 证据格式（`CsvEvidence`/report_data 挑战绑定/证书链来源/RTMR+SM3）与 Trustee verifier 经 `kbs-types`(Tee::Csv/HashAlgorithm::Sm3/Response-Challenge) 的字段对齐清单与变更控制 |
+| 39 | [custom-D2连调执行记录.md](custom-D2连调执行记录.md) | （无原文） | — | **个人新增** | 个人原创：`custom-D2连调runbook.md` 的**实测执行记录**——每步命令与结果、问题与解法、runbook 缺陷对照表、服务器当前状态与复测方法、国内网络适配速查；**第 7 节为步骤 7（mock KBS / cc_kbc）实测数据**（真实 RCAR 请求报文、AA→CDH 顺序修正） |
 
-> 注：序号 33、34、35、36、37、38 为个人原创笔记（项目理解 / 个人开发指南 / D2 连调 runbook / CDH sealed secret / 真机 CSV 部署 / CSV 证据与 Trustee 对齐），无固定原文，无过期概念，随项目认知更新即可。
+> 注：序号 33–39 为个人原创笔记（项目理解 / 个人开发指南 / D2 连调 runbook / CDH sealed secret / 真机 CSV 部署 / CSV 证据与 Trustee 对齐 / D2 连调执行记录），无固定原文，无过期概念，随项目认知更新即可。
 
 ## 统计
 
-- 翻译类：`31` 份（覆盖仓库内全部原始 `.md` 文档）
-- 个人新增：`5` 份
-- 合计：`36` 份 `custom-` 文件
+- 翻译类：`32` 份（覆盖仓库内全部原始 `.md` 文档）
+- 个人新增：`7` 份
+- 合计：`39` 份 `custom-` 文件
 
 ## 维护约定
 
 - 新增译文：同目录建 `custom-<原名>`，并在本表追加一行（填原文路径 + 原文基准 commit/日期）。
 - 上游原文更新后：更新对应译文，并把「原文基准」刷新为该原文最新 commit。
 - 删除某原文时：同步删除其 `custom-` 译文与本表行。
+- 新增个人原创文档：放仓库根目录并加 `custom-` 前缀，同时在本表追加一行并更新「统计」。
+- **不进本仓库**的材料（放外部知识库目录 `Docs/机密计算/agent成果（加工）`）：架构图 / 交付物图解等**图片类**（二进制，避免撑大仓库）、任务与交付参考等**项目管理类**、跨多仓清单类——它们不随本仓库代码版本演进，也无版本对应关系。
+- **脱敏要求**：本仓库公开可见，文档中不得写入服务器真实 IP、账号凭据等敏感信息，一律用 `<服务器IP>` 之类的占位符。
