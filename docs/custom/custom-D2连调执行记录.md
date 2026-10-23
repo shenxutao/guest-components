@@ -195,3 +195,166 @@ Get Resource failed: Kbs client error: get resource failed: GetTokenFailed(
 完整 RCAR 需要**真 KBS 验明 + 真证据**；mock 只应答协议形状、不做验明，且测试 VM 无 TEE 无真证据 → token 拿不到。这正是 runbook 步骤 7 声明的「只验证请求/响应形状，不做真证明」的正当结果；真机 + 真 Trustee 才能拿到 token（步骤 8）。
 
 **收尾**：停掉 cc_kbc 版 CDH/AA 与 mock，恢复 `offline_fs_kbc::null`（AA 257149 → CDH 257168），复测 key/1、key/2、evidence 全通。
+
+---
+
+## 8. 完整执行命令清单（按阶段，可直接复用）
+
+> 汇总 2026-10-22（步骤 0–6）与 2026-10-23（回归 + 步骤 7）**实际执行过**的命令，按阶段归类；与 runbook 的「完整部署与测试流程」一一对应。
+
+### 8.1 环境准备（步骤 0.1）
+
+```bash
+# 国内镜像（先配，否则 rustup 卡死）
+export RUSTUP_DIST_SERVER=https://mirrors.cloud.tencent.com/rustup
+export RUSTUP_UPDATE_ROOT=https://mirrors.cloud.tencent.com/rustup/rustup
+mkdir -p ~/.cargo
+printf '[source.crates-io]\nreplace-with = "rsproxy-sparse"\n\n[source.rsproxy-sparse]\nregistry = "sparse+https://rsproxy.cn/index/"\n\n[net]\ngit-fetch-with-cli = true\n' > ~/.cargo/config.toml
+printf '[url "https://ghfast.top/https://github.com/"]\n\tinsteadOf = https://github.com/\n[http]\n\tversion = HTTP/1.1\n' > ~/.gitconfig
+
+bash scripts/setup-server.sh
+cargo --version && rustc --version && protoc --version
+```
+
+### 8.2 代码上服务器（步骤 0.2，Mac 执行）
+
+```bash
+cd "/Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components"
+git bundle create /tmp/gc-dev.bundle 2026-10-21-dev      # 实测 5.5M
+scp /tmp/gc-dev.bundle ubuntu@<2服务器IP>:~/
+# 服务器
+git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkout 2026-10-21-dev
+```
+
+### 8.3 编译（步骤 2）
+
+```bash
+cargo build -p confidential-data-hub -p api-server-rest                                    # 13m07s
+cargo build -p attestation-agent --no-default-features --features "kbs,coco_as,bin,ttrpc"  # 49.63s
+ls -lh target/debug/ttrpc-cdh target/debug/api-server-rest target/debug/ttrpc-aa target/debug/secret target/debug/ttrpc-cdh-tool
+```
+
+### 8.4 配置（步骤 3、4、5.0）
+
+```bash
+cat > /tmp/dev-resources.json <<'EOF'
+{ "default/key/1": "bXktZGV2LXNlY3JldC1rZXktMDAx", "default/key/2": "YW5vdGhlci1zZWNyZXQ=" }
+EOF
+sudo mkdir -p /run/confidential-containers
+sudo chown -R ubuntu:ubuntu /run/confidential-containers
+```
+
+### 8.5 启动（步骤 5，CDH → AA → ASR）
+
+```bash
+cd ~/guest-components
+AA_KBC_PARAMS="offline_fs_kbc::null" OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json" nohup ./target/debug/ttrpc-cdh > ~/cdh.log 2>&1 &
+AA_KBC_PARAMS="offline_fs_kbc::null" nohup ./target/debug/ttrpc-aa > ~/aa.log 2>&1 &
+nohup ./target/debug/api-server-rest --features all > ~/asr.log 2>&1 &
+```
+
+### 8.6 验证（步骤 6）
+
+```bash
+curl -s http://127.0.0.1:8006/info
+curl -s http://127.0.0.1:8006/cdh/resource/default/key/1
+curl -s http://127.0.0.1:8006/cdh/resource/default/key/2
+./target/debug/ttrpc-cdh-tool get-resource --resource-uri "kbs:///default/key/1"
+
+mkdir -p /tmp/secrets /run/confidential-containers/cdh/sealed-secret
+./target/debug/secret keygen --kid my-key --output-dir /tmp/secrets
+cp /tmp/secrets/my-key-public.json /run/confidential-containers/cdh/sealed-secret/my-key
+./target/debug/secret seal --signing-kid my-key --signing-jwk-path /tmp/secrets/my-key-private.json vault --resource-uri "kbs:///default/key/1" --provider kbs | tail -n +2 > /tmp/sealed-secret.txt
+AA_KBC_PARAMS="offline_fs_kbc::null" OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json" ./target/debug/secret unseal --file-path /tmp/sealed-secret.txt --aa-kbc-params "offline_fs_kbc::null"
+cat /tmp/sealed-secret.txt.unsealed
+
+curl -s "http://127.0.0.1:8006/aa/evidence?runtime_data=test"
+curl -s "http://127.0.0.1:8006/aa/token?token_type=kbs"
+```
+
+### 8.7 步骤 7（mock KBS）
+
+```bash
+python3 ~/mock-kbs.py &
+curl -s -X POST http://127.0.0.1:8080/kbs/v0/auth -H "Content-Type: application/json" -d '{}'
+AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080" nohup ./target/debug/ttrpc-aa > ~/aa-cckbc.log 2>&1 &
+sleep 2
+AA_KBC_PARAMS="cc_kbc::http://127.0.0.1:8080" nohup ./target/debug/ttrpc-cdh > ~/cdh-cckbc.log 2>&1 &
+curl -s -m 25 -w "\n[HTTP %{http_code}]\n" http://127.0.0.1:8006/cdh/resource/default/key/1
+cat ~/mock-kbs.log
+```
+
+---
+
+## 9. 接口请求/返回参数实测记录
+
+> 以下为 2 服务器上的实际观测值（HEAD `8d68afe8`，offline_fs_kbc 模式）。接口定义见 runbook 步骤 6 与附录 C。
+
+### 9.1 ASR REST（127.0.0.1:8006）
+
+| 接口 | 请求 | 实测返回 |
+|---|---|---|
+| `/info` | GET，无参数 | `{"version":"Guest Components Version: 8d68afe8","tee":"sample","feature":"all"}` |
+| `/cdh/resource/default/key/1` | GET | `my-dev-secret-key-001` |
+| `/cdh/resource/default/key/2` | GET | `another-secret` |
+| `/cdh/resource/default/key/99` | GET（不存在） | `ttrpc request error` + **HTTP 500** |
+| `/cdh/resource/` | GET（空路径） | `ttrpc request error` + **HTTP 500** |
+| `/aa/evidence?runtime_data=test` | GET | `{"report_data":"dGVzdA==","svn":"1"}` |
+| `/aa/evidence?runtime_data=hello` | GET | `{"report_data":"aGVsbG8=","svn":"1"}` |
+| `/aa/evidence` | GET（缺 `runtime_data`） | **`BAD REQUEST`** |
+| `/aa/token?token_type=kbs` | GET | 明确错误（offline KBC 无真 KBS，符合预期） |
+| `/aa/token?token_type=default` | GET（非法） | `Unsupported token type` |
+| `/info` 非 loopback 访问 | GET | **403**（IP guard） |
+| `ss -tlnp \| grep 8006` | — | `LISTEN 127.0.0.1:8006`（仅 loopback） |
+
+### 9.2 ttrpc-cdh-tool（直连 CDH）
+
+| 请求 | 实测返回 |
+|---|---|
+| `get-resource --resource-uri "kbs:///default/key/1"`（不含任何 env） | `bXktZGV2LXNlY3JldC1rZXktMDAx`（= `my-dev-secret-key-001`） |
+| `get-resource --resource-uri "kbs:///default/key/2"`（不含任何 env） | `YW5vdGhlci1zZWNyZXQ=`（= `another-secret`） |
+
+> 结论：该工具是**纯 socket 客户端**，资源由 CDH 侧环境变量决定，客户端无需 `AA_KBC_PARAMS`。
+
+### 9.3 `secret` CLI（sealed secret）
+
+| 步骤 | 命令 | 实测返回/产物 |
+|---|---|---|
+| keygen | `secret keygen --kid my-key --output-dir /tmp/secrets` | 生成 `my-key-private.json` / `my-key-public.json` |
+| seal vault | `secret seal --signing-kid my-key --signing-jwk-path .../my-key-private.json vault --resource-uri kbs:///default/key/1 --provider kbs` | stdout 首行 `Warning: Secrets must be provisioned to provider separately.`，随后 `sealed.…` base64 JWS |
+| unseal | `secret unseal --file-path ... --aa-kbc-params offline_fs_kbc::null` | 生成 `...unsealed`，内容 `my-dev-secret-key-001` |
+
+### 9.4 mock KBS（步骤 7）
+
+| 请求 | 实测返回 |
+|---|---|
+| `POST /kbs/v0/auth`（mock 自检） | `{"nonce":"bW9jay1ub25jZQ","extra_params":{"algorithm":"sha256"}}` |
+| `POST /kbs/v0/attest` | `{"token":"<FAKE_JWT>"}` |
+| `GET /kbs/v0/resource/…` | `{"code":200,"message":"mock resource …","data":"bW9jay1yZXNvdXJjZS1wbGFpbnRleHQ="}` |
+| cc_kbc 真实触发 | mock 收到 5 次 `POST /kbs/v0/auth`，body 含 `version:0.4.0`、`tee:sample`、`extra-params`；ASR 最终 500 `ttrpc request error after reconnect`，CDH `GetTokenFailed(...)` |
+
+---
+
+## 10. 复测步骤（照着做，快速回归）
+
+> 服务器已部署过、进程被重启或想快速确认仍健康时，按这几步走。
+
+```bash
+# 1) 连上去
+ssh ubuntu@<2服务器IP>
+
+# 2) 确认三进程是否在跑
+pgrep -af 'ttrpc-cdh|ttrpc-aa|api-server-rest'
+
+# 3) 若没跑，按 8.5 重启（注意顺序 CDH → AA → ASR），再等 1s
+# 4) 健康检查
+curl -s http://127.0.0.1:8006/info
+curl -s http://127.0.0.1:8006/cdh/resource/default/key/1     # 期望 my-dev-secret-key-001
+curl -s http://127.0.0.1:8006/cdh/resource/default/key/2     # 期望 another-secret
+curl -s "http://127.0.0.1:8006/aa/evidence?runtime_data=test"  # 期望 {"report_data":"dGVzdA==","svn":"1"}
+
+# 5) 失败排查
+tail -n 50 ~/cdh.log ~/aa.log ~/asr.log
+```
+
+判据：`/info` 返回 `tee:sample`、两个资源值正确、evidence 返回 `dGVzdA==` → 环境正常。任何一步不符，回看第 2 节「问题与解决」或第 6 节踩坑。
