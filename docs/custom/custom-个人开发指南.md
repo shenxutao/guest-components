@@ -23,7 +23,7 @@
 
 | remote | 地址 | 用途 |
 |--------|------|------|
-| `origin` | https://github.com/shenxutao/guest-components.git | 你的 fork（**可写**） |
+| `origin` | https://github.com/<你的 GitHub 账号>/guest-components.git | 你的 fork（**可写**） |
 | `upstream` | https://github.com/confidential-containers/guest-components | 官方（**只读**，用于同步） |
 
 查看：`git remote -v`
@@ -41,7 +41,7 @@
 ## 4. 日常操作
 
 ```bash
-cd /Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components
+cd "$HOME/MyWorkspace/Docs/机密计算/开发/guest-components"
 
 # ① 改代码后提交（始终在 2026-10-21-dev 上）
 git add -A && git commit -m "你的改动说明"
@@ -65,7 +65,7 @@ git config --global credential.helper osxkeychain
 git push -u origin 2026-10-21-dev       # 首次会提示输入 用户名 + PAT
 
 # 方式 B：临时用 PAT 直推
-git push https://<你的PAT>@github.com/shenxutao/guest-components.git 2026-10-21-dev
+git push https://<你的PAT>@github.com/<你的 GitHub 账号>/guest-components.git 2026-10-21-dev
 ```
 
 > PAT 申请：GitHub → Settings → Developer settings → Personal access tokens，勾 `repo` 权限。

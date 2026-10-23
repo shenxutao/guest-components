@@ -23,7 +23,7 @@
 
 这是 `confidential-containers/guest-components` 的**个人 fork**：
 
-- `origin` = `https://github.com/shenxutao/guest-components.git`（可写，个人维护）
+- `origin` = `https://github.com/<你的 GitHub 账号>/guest-components.git`（可写，个人维护）
 - `upstream` = 官方仓库（**只读，绝不 push**）
 - 当前开发分支：`2026-10-21-dev`，已解除对 upstream 的跟踪，防止误推官方
 - 个人主责（见 `custom-个人开发指南.md`）：

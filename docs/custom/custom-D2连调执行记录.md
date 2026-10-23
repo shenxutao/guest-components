@@ -253,7 +253,7 @@ cargo --version && rustc --version && protoc --version
 > **作用**：把本地开发分支（含未推送提交）打包成单文件带上服务器，还原成可编译的仓库（当前分支有未推提交，不能用远端 clone）。
 
 ```bash
-cd "/Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components"
+cd "$HOME/MyWorkspace/Docs/机密计算/开发/guest-components"
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev      # 实测 5.5M
 scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
 # 服务器

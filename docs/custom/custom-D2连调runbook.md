@@ -92,7 +92,7 @@ sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapf
 ```bash
 # Mac 本地
 # cd 到仓库根
-cd "/Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components"
+cd "$HOME/MyWorkspace/Docs/机密计算/开发/guest-components"
 # git bundle：把分支 2026-10-21-dev 打包成单个文件（当前分支有未推提交、不能用远端 clone 时，靠它把代码带上去）
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev && ls -lh /tmp/gc-dev.bundle
 # scp 把打包文件传到服务器家目录
@@ -242,7 +242,7 @@ cd ~/guest-components
 bash scripts/setup-server.sh
 
 # 2) 取代码（Mac 本地执行；先 cd 到仓库根）
-cd "/Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components"
+cd "$HOME/MyWorkspace/Docs/机密计算/开发/guest-components"
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev && scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
 #   服务器上：git clone ~/gc-dev.bundle guest-components && cd guest-components && git checkout 2026-10-21-dev
 
@@ -328,7 +328,7 @@ bash scripts/setup-server.sh
 当前分支 `2026-10-21-dev` 有未推提交，不能用远端 clone；用 `git bundle`：
 ```bash
 # Mac 上：打包分支（含全部本地提交）
-cd "/Users/shenxutao/MyWorkspace/Docs/机密计算/开发/guest-components"
+cd "$HOME/MyWorkspace/Docs/机密计算/开发/guest-components"
 git bundle create /tmp/gc-dev.bundle 2026-10-21-dev
 scp /tmp/gc-dev.bundle ubuntu@111.229.159.237:~/
 ```
