@@ -1,7 +1,7 @@
 # 个人文档清单（custom- 索引）
 
 > 目的：作为本仓库所有 `custom-` 前缀文件的**总索引**，方便总览、并跟踪「译文相对 upstream 原文的过期情况」。
-> 命名约定：译文与原文保持**对应目录结构**、统一收在 `docs/d2/` 下（加 `custom-` 前缀），原文仍留在各组件原目录；个人新增文档也放 `docs/d2/`（加 `custom-` 前缀）。
+> 命名约定：译文与原文保持**对应目录结构**、统一收在 `docs/custom/` 下（加 `custom-` 前缀），原文仍留在各组件原目录；个人新增文档也放 `docs/custom/`（加 `custom-` 前缀）。
 
 ## 用法：如何发现「上游已更新、译文该同步」
 
@@ -72,7 +72,17 @@ git log --oneline <基准commit>..upstream/main -- confidential-data-hub/docs/SE
 - 新增译文：同目录建 `custom-<原名>`，并在本表追加一行（填原文路径 + 原文基准 commit/日期）。
 - 上游原文更新后：更新对应译文，并把「原文基准」刷新为该原文最新 commit。
 - 删除某原文时：同步删除其 `custom-` 译文与本表行。
-- 新增个人原创文档：放 `docs/d2/` 目录（仍加 `custom-` 前缀），同时在本表追加一行并更新「统计」。
-- **仓库内文档布局**：`docs/d2/` 收**全部** `custom-` 文档——个人原创笔记直接在 `docs/d2/` 下；译文按原组件目录结构镜像到 `docs/d2/` 下（如 `docs/d2/api-server-rest/`、`docs/d2/attestation-agent/...`），原文仍留在各组件原目录，不堆在仓库根。
+- 新增个人原创文档：放 `docs/custom/` 目录（仍加 `custom-` 前缀），同时在本表追加一行并更新「统计」。
+- **仓库内文档布局**：`docs/custom/` 收**全部** `custom-` 文档——个人原创笔记直接在 `docs/custom/` 下；译文按原组件目录结构镜像到 `docs/custom/` 下（如 `docs/custom/api-server-rest/`、`docs/custom/attestation-agent/...`），原文仍留在各组件原目录，不堆在仓库根。
+- **目录结构（节选）**：
+  ```
+  docs/custom/
+  ├─ custom-文档清单.md                      本索引
+  ├─ custom-项目理解.md / 个人开发指南.md / D2连调runbook.md / D2连调执行记录.md
+  ├─ custom-CDH-SealedSecret.md / 真机CSV部署.md / CSV证据与Trustee对齐.md
+  ├─ custom-AGENTS.md / custom-README.md     根目录译文镜像
+  └─ api-server-rest/  attestation-agent/  confidential-data-hub/  image-rs/  ocicrypt-rs/
+        └─ （各组件译文，按原目录结构镜像，如 attestation-agent/docs/custom-*.md）
+  ```
 - **不进本仓库**的材料（放外部知识库目录 `Docs/机密计算/agent成果（加工）`）：架构图 / 交付物图解等**图片类**（二进制，避免撑大仓库）、任务与交付参考等**项目管理类**、跨多仓清单类——它们不随本仓库代码版本演进，也无版本对应关系。
 - **脱敏要求**：本仓库公开可见，文档中不得写入服务器真实 IP、账号凭据等敏感信息，一律用 `<服务器IP>` 之类的占位符。
