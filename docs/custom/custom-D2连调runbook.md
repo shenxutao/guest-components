@@ -8,7 +8,8 @@
 
 ## 目录
 
-- [完整部署与测试流程（照着做：0 → 验证通过）](#fullflow) ← **第一次照着这份做**
+- [完整部署与测试流程（照着做：0 → 验证通过）](#fullflow) ← **第一次照着这份做（全新机从这条开始，跑完 A–E 即通过）**
+- ↓↓ 以下「步骤 0–6」是**上面主流程各阶段的详细展开版**（主流程已包含）：**照主流程跑即可，不要从头逐个执行**；只在某步卡住或想看细节时点进去。
 - [步骤 0：准备 Ubuntu 环境（系统选型 + 服务器初始化 + 代码上服务器）](#step0)
 - [步骤 1：进入仓库并切到开发分支](#step1)
 - [步骤 2：构建三个组件（服务器编译详解）](#step2)
@@ -293,6 +294,8 @@ curl -s http://127.0.0.1:8006/cdh/resource/default/key/1    # 期望：my-dev-se
 <a id="step0"></a>
 ## 步骤 0：准备 Ubuntu 环境（系统选型 + 服务器初始化 + 代码上服务器）
 
+> 📖 **本节是主流程「阶段 A：准备服务器」的详细展开**——照主流程跑无需重复执行；本节用于某步卡住时查细节。
+
 **0.0 系统选型（重装系统时）**
 - 发行版：Ubuntu LTS（**24.04 首选**；26.04 LTS 也可用但较新、生产验证少）；**不要选 CentOS / Rocky**（Makefile 的 `DebianOS` 检测不触发，依赖要手搓）
 - 架构：**x86_64**（项目 TEE attester 均为 x86 平台，CSV 是海光 x86）；**避开 ARM / 鲲鹏**
@@ -358,6 +361,8 @@ cargo --version && rustc --version && protoc --version
 <a id="step1"></a>
 ## 步骤 1：进入仓库并切到开发分支
 
+> 📖 **本节对应主流程「阶段 A」的 A4**（代码上服务器 + 切分支）——照主流程跑无需重复执行。
+
 ```bash
 # 目录：服务器、仓库根 ~/guest-components 的父目录（已 clone 后）
 cd guest-components                         # 进入你 clone 的仓库根
@@ -369,6 +374,8 @@ git status -sb                              # 确认领先/落后状态
 
 <a id="step2"></a>
 ## 步骤 2：构建三个组件（服务器编译详解）
+
+> 📖 **本节是主流程「阶段 B：编译」的详细展开**——照主流程跑无需重复执行；本节用于编译报错时排查。
 
 > 目标产物集中在 `target/debug/`：`ttrpc-cdh`、`api-server-rest`、`ttrpc-aa`、`secret`、`ttrpc-cdh-tool`。
 
@@ -432,6 +439,8 @@ file target/debug/ttrpc-cdh    # 期望：ELF 64-bit LSB executable, x86-64
 <a id="step3"></a>
 ## 步骤 3：准备 offline_fs_kbc 资源文件（替代外部 KBS）
 
+> 📖 **本节对应主流程「阶段 C：配置」的 C1**（生成离线资源文件）——照主流程跑无需重复执行。
+
 **背景**：AA/CDH 通过 KBC 取资源/密钥，**默认 KBC 就是 `offline_fs_kbc`**（`attestation-agent/attestation-agent/src/config/aa_kbc_params.rs:23`，取不到时回退 `offline_fs_kbc::null` `:63`）。它从**本地 JSON 文件**读取资源，因此本地连调**完全不需要 Beeceptor / 真 Trustee**。
 
 资源文件格式（来自 `confidential-data-hub/kms/src/plugins/kbs/offline_fs.rs:71-87` 解析逻辑）：
@@ -463,6 +472,8 @@ cat /tmp/dev-resources.json
 <a id="step4"></a>
 ## 步骤 4：配置 KBC 参数（让 AA/CDH 走 offline_fs_kbc）
 
+> 📖 **本节对应主流程「阶段 C：配置」的 KBC 参数说明**——照主流程跑无需重复执行。
+
 **背景**：KBC 由环境变量 `AA_KBC_PARAMS`（格式 `KBC_NAME::KBS_URI`）或 `/etc/agent-config.toml` 指定；也可经内核 cmdline `agent.aa_kbc_params=`。
 
 ```bash
@@ -479,6 +490,8 @@ export OFFLINE_FS_KBC_EXTRA_FILE_PATH="/tmp/dev-resources.json"
 
 <a id="step5"></a>
 ## 步骤 5：创建运行时目录并启动三个守护进程
+
+> 📖 **本节是主流程「阶段 D：启动」的详细展开**（含 5.0 运行时目录）——照主流程跑无需重复执行。
 
 **背景**
 - CDH 监听 Unix socket `unix:///run/confidential-containers/cdh.sock`（image-rs 客户端约定，见 `image-rs/src/resource/kbs/ttrpc.rs:16`）。
@@ -524,6 +537,8 @@ cargo run -p api-server-rest -- --features all
 
 <a id="step6"></a>
 ## 步骤 6：验证（连调检查表）
+
+> 📖 **本节是主流程「阶段 E：验证」的详细展开**（含各接口请求/返回参数）——照主流程跑无需重复执行。
 
 <a id="step61"></a>
 ### 6.1 ASR REST 探活 + 取资源
