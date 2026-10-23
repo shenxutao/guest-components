@@ -7,22 +7,22 @@
 
 ## 目录
 
-- [步骤 0：准备 Ubuntu 环境（系统选型 + 服务器初始化 + 代码上服务器）](#step0)
-- [步骤 1：进入仓库并切到开发分支](#step1)
-- [步骤 2：构建三个组件（开发用原生 glibc，免 musl 交叉）](#step2)
-- [步骤 3：准备 offline_fs_kbc 资源文件（替代外部 KBS）](#step3)
-- [步骤 4：配置 KBC 参数（让 AA/CDH 走 offline_fs_kbc）](#step4)
-- [步骤 5：创建运行时目录并启动三个守护进程](#step5)
-- [步骤 6：验证（连调检查表）](#step6)
-  - [6.1 ASR REST 探活 + 取资源](#step61)
-  - [6.2 image-rs 直连 CDH（验证 kbs:// → offline_fs_kbc 通路）](#step62)
-  - [6.3 sealed secret（D2 重点）](#step63)
-  - [6.4 AA evidence / token（桩）](#step64)
-- [步骤 7（可选）：用 mock KBS 测 cc_kbc 真 HTTP 路径](#step7)
-- [步骤 8：从测试 VM 迁移到真海光 CSV（复用本 runbook）](#step8)
-- [附录 A：offline_fs_kbc 资源文件格式速查](#appendixa)
-- [附录 B：最小 mock KBS（Rust，hyper，仅示意）](#appendixb)
-- [参考文件](#refs)
+- [步骤 0：准备 Ubuntu 环境（系统选型 + 服务器初始化 + 代码上服务器）](../../.#step0)
+- [步骤 1：进入仓库并切到开发分支](../../.#step1)
+- [步骤 2：构建三个组件（开发用原生 glibc，免 musl 交叉）](../../.#step2)
+- [步骤 3：准备 offline_fs_kbc 资源文件（替代外部 KBS）](../../.#step3)
+- [步骤 4：配置 KBC 参数（让 AA/CDH 走 offline_fs_kbc）](../../.#step4)
+- [步骤 5：创建运行时目录并启动三个守护进程](../../.#step5)
+- [步骤 6：验证（连调检查表）](../../.#step6)
+  - [6.1 ASR REST 探活 + 取资源](../../.#step61)
+  - [6.2 image-rs 直连 CDH（验证 kbs:// → offline_fs_kbc 通路）](../../.#step62)
+  - [6.3 sealed secret（D2 重点）](../../.#step63)
+  - [6.4 AA evidence / token（桩）](../../.#step64)
+- [步骤 7（可选）：用 mock KBS 测 cc_kbc 真 HTTP 路径](../../.#step7)
+- [步骤 8：从测试 VM 迁移到真海光 CSV（复用本 runbook）](../../.#step8)
+- [附录 A：offline_fs_kbc 资源文件格式速查](../../.#appendixa)
+- [附录 B：最小 mock KBS（Rust，hyper，仅示意）](../../.#appendixb)
+- [参考文件](../../.#refs)
 
 ---
 
