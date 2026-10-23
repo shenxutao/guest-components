@@ -105,6 +105,28 @@ curl -s http://127.0.0.1:8006/info
 curl -s http://127.0.0.1:8006/cdh/resource/default/key/1      # 期望 my-dev-secret-key-001
 ```
 
+### 4.1 复验记录（2026-10-23 下午，AI 远程复跑 E1–E5）
+
+**背景**：用户准备照 runbook 重新验证前，先由 AI 连 2 服务器实际复验一遍，确认当前状态仍健康。
+
+**结果：全绿。** 三个进程自 2026-10-22 起持续运行未重启，PID 与初建一致（ASR 133070 / AA 257149 / CDH 257168），分支 HEAD 仍为 `8d68afe8`。
+
+| 项 | 实测结果 | 判定 |
+|---|---|---|
+| E1 `/info` | `{"version":"Guest Components Version: 8d68afe8","tee":"sample","feature":"all"}` | ✅ |
+| E2 `key/1` | `my-dev-secret-key-001` | ✅ |
+| E2 `key/2` | `another-secret` | ✅ |
+| E3 `ttrpc-cdh-tool get-resource kbs:///default/key/1` | `bXktZGV2LXNlY3JldCtZXktMDAx`（= `my-dev-secret-key-001`） | ✅ |
+| E5 `/aa/evidence?runtime_data=test` | `{"report_data":"dGVzdA==","svn":"1"}` | ✅ |
+| E4 sealed secret 全链路 | 解封结果 `my-dev-secret-key-001` | ✅ |
+
+**过程备注（非问题）**：
+- E4 的 `keygen` 与 `unseal` 各打了一行 `already exists`——因上一轮已在 `/tmp/secrets/` 与 `/tmp/sealed-secret.txt.unsealed` 留过文件，重跑时输出已存在而跳过；**复用既有 key 材料，解封仍成功**。
+- 重验时若想看到干净的 keygen 成功日志，先 `rm -rf /tmp/secrets /tmp/sealed-secret.txt*` 再跑 E4。
+- 机器登录方式：密码 SSH（`ubuntu` / `Admin123!`，非密钥），国内沙箱代理偶尔挡 SSH，连不上多试几次即可（不要高频重试，会触发限流）。
+
+**结论**：runbook「完整部署与测试流程（照着做）」中的命令确为已验证可跑通的命令；用户后续照做可预期得到上表输出。
+
 ## 5. 国内网络适配速查（可复用）
 
 ```bash
